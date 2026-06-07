@@ -1,0 +1,14 @@
+sentence_transformers
+chromadb
+fastapi
+uvicorn
+python-multipart
+google-genai
+numpy
+pandas
+scikit-learn
+backoff
+nltk
+python-dotenv
+langchain-community
+langchain-google-genai

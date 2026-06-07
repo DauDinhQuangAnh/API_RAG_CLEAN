@@ -1,0 +1,561 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RAG API Test UI</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --panel-soft: #f1f5f4;
+      --text: #18201f;
+      --muted: #65706d;
+      --border: #d8dfdd;
+      --primary: #177d63;
+      --primary-dark: #0f5f4a;
+      --accent: #ad6b16;
+      --danger: #b83932;
+      --shadow: 0 12px 28px rgba(22, 32, 30, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 15px;
+      line-height: 1.45;
+    }
+
+    .shell {
+      width: min(1180px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 24px 0 40px;
+    }
+
+    header {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 18px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    .status {
+      min-width: 190px;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      border-radius: 8px;
+      color: var(--muted);
+      text-align: right;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
+      gap: 16px;
+      align-items: start;
+    }
+
+    .stack {
+      display: grid;
+      gap: 16px;
+    }
+
+    section {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      padding: 16px;
+    }
+
+    h2 {
+      margin: 0 0 14px;
+      font-size: 17px;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    label {
+      display: grid;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    input,
+    textarea,
+    select {
+      width: 100%;
+      min-height: 40px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--text);
+      font: inherit;
+      padding: 9px 10px;
+      outline: none;
+    }
+
+    textarea {
+      min-height: 100px;
+      resize: vertical;
+    }
+
+    input:focus,
+    textarea:focus,
+    select:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(23, 125, 99, 0.14);
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    button {
+      min-height: 38px;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      background: var(--primary);
+      color: #fff;
+      cursor: pointer;
+      font: inherit;
+      font-weight: 700;
+      padding: 8px 12px;
+    }
+
+    button:hover {
+      background: var(--primary-dark);
+    }
+
+    button.secondary {
+      background: var(--panel-soft);
+      border-color: var(--border);
+      color: var(--text);
+    }
+
+    button.secondary:hover {
+      background: #e6eeeb;
+    }
+
+    button.danger {
+      background: var(--danger);
+    }
+
+    button.danger:hover {
+      background: #8f2b27;
+    }
+
+    .collection-list {
+      display: grid;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .collection-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--panel-soft);
+    }
+
+    .collection-name {
+      overflow-wrap: anywhere;
+      font-weight: 700;
+    }
+
+    .output {
+      min-height: 260px;
+      max-height: 620px;
+      overflow: auto;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #101817;
+      color: #e5f0ed;
+      padding: 14px;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 13px;
+    }
+
+    .hint {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 8px;
+    }
+
+    .inline {
+      display: flex;
+      gap: 8px;
+      align-items: end;
+    }
+
+    .inline > label {
+      flex: 1;
+    }
+
+    @media (max-width: 900px) {
+      .grid,
+      .row {
+        grid-template-columns: 1fr;
+      }
+
+      header {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .status {
+        text-align: left;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div>
+        <h1>RAG API Test UI</h1>
+        <div class="hint">Test API local qua FastAPI server.</div>
+      </div>
+      <div id="status" class="status">Chua ket noi</div>
+    </header>
+
+    <div class="grid">
+      <div class="stack">
+        <section>
+          <h2>Ket noi</h2>
+          <div class="inline">
+            <label>
+              Base URL
+              <input id="baseUrl" value="http://127.0.0.1:8000" autocomplete="off">
+            </label>
+            <button id="healthBtn" type="button">Health</button>
+          </div>
+        </section>
+
+        <section>
+          <h2>Collections</h2>
+          <div class="row">
+            <label>
+              Ten collection
+              <input id="collectionName" list="collectionOptions" placeholder="rag_collection_demo">
+            </label>
+            <label>
+              Mo ta
+              <input id="collectionDescription" placeholder="Demo collection">
+            </label>
+          </div>
+          <datalist id="collectionOptions"></datalist>
+          <div class="actions">
+            <button id="listCollectionsBtn" type="button" class="secondary">Tai danh sach</button>
+            <button id="createCollectionBtn" type="button">Tao collection</button>
+            <button id="getCollectionBtn" type="button" class="secondary">Xem thong tin</button>
+            <button id="deleteCollectionBtn" type="button" class="danger">Xoa collection</button>
+          </div>
+          <div id="collectionsList" class="collection-list"></div>
+        </section>
+
+        <section>
+          <h2>Ingest CSV</h2>
+          <div class="row">
+            <label>
+              File CSV
+              <input id="csvFile" type="file" accept=".csv,text/csv">
+            </label>
+            <label>
+              Cot de index
+              <input id="indexColumn" placeholder="content">
+            </label>
+          </div>
+          <label style="margin-top: 10px;">
+            Collection
+            <input id="ingestCollection" list="collectionOptions" placeholder="rag_collection_demo">
+          </label>
+          <div class="actions">
+            <button id="ingestBtn" type="button">Upload va ingest</button>
+          </div>
+        </section>
+
+        <section>
+          <h2>Query RAG</h2>
+          <div class="row">
+            <label>
+              Collection
+              <input id="queryCollection" list="collectionOptions" placeholder="rag_collection_demo">
+            </label>
+            <label>
+              So document lay ra
+              <input id="retrievalCount" type="number" min="1" max="50" value="3">
+            </label>
+          </div>
+          <label style="margin-top: 10px;">
+            Cot can tra loi
+            <input id="columnsToAnswer" placeholder="content, title">
+          </label>
+          <label style="margin-top: 10px;">
+            Cau hoi
+            <textarea id="ragQuery" placeholder="Nhap cau hoi RAG..."></textarea>
+          </label>
+          <div class="actions">
+            <button id="queryBtn" type="button">Query</button>
+          </div>
+        </section>
+      </div>
+
+      <section>
+        <h2>Ket qua</h2>
+        <pre id="output" class="output">San sang.</pre>
+        <div class="actions">
+          <button id="clearOutputBtn" type="button" class="secondary">Xoa ket qua</button>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    const elements = {
+      baseUrl: document.getElementById("baseUrl"),
+      status: document.getElementById("status"),
+      output: document.getElementById("output"),
+      collectionName: document.getElementById("collectionName"),
+      collectionDescription: document.getElementById("collectionDescription"),
+      collectionsList: document.getElementById("collectionsList"),
+      collectionOptions: document.getElementById("collectionOptions"),
+      csvFile: document.getElementById("csvFile"),
+      indexColumn: document.getElementById("indexColumn"),
+      ingestCollection: document.getElementById("ingestCollection"),
+      queryCollection: document.getElementById("queryCollection"),
+      columnsToAnswer: document.getElementById("columnsToAnswer"),
+      retrievalCount: document.getElementById("retrievalCount"),
+      ragQuery: document.getElementById("ragQuery")
+    };
+
+    const savedBaseUrl = localStorage.getItem("ragApiBaseUrl");
+    if (savedBaseUrl) {
+      elements.baseUrl.value = savedBaseUrl;
+    }
+
+    elements.baseUrl.addEventListener("change", () => {
+      localStorage.setItem("ragApiBaseUrl", elements.baseUrl.value.trim());
+    });
+
+    function baseUrl() {
+      return elements.baseUrl.value.trim().replace(/\/+$/, "");
+    }
+
+    function endpoint(path) {
+      return `${baseUrl()}${path}`;
+    }
+
+    function writeOutput(data) {
+      if (typeof data === "string") {
+        elements.output.textContent = data;
+        return;
+      }
+      elements.output.textContent = JSON.stringify(data, null, 2);
+    }
+
+    function setStatus(text, ok) {
+      elements.status.textContent = text;
+      elements.status.style.color = ok ? "var(--primary)" : "var(--muted)";
+    }
+
+    async function request(path, options = {}) {
+      const response = await fetch(endpoint(path), options);
+      const contentType = response.headers.get("content-type") || "";
+      const payload = contentType.includes("application/json")
+        ? await response.json()
+        : await response.text();
+
+      if (!response.ok) {
+        const detail = typeof payload === "object" ? payload : { detail: payload };
+        throw new Error(JSON.stringify(detail, null, 2));
+      }
+
+      return payload;
+    }
+
+    async function runAction(label, action) {
+      try {
+        setStatus(`${label}...`, false);
+        const result = await action();
+        writeOutput(result);
+        setStatus(`${label} OK`, true);
+        return result;
+      } catch (error) {
+        writeOutput(error.message || String(error));
+        setStatus(`${label} loi`, false);
+        return null;
+      }
+    }
+
+    function selectedCollection() {
+      return elements.collectionName.value.trim();
+    }
+
+    function syncCollectionInputs(name) {
+      elements.collectionName.value = name;
+      elements.ingestCollection.value = name;
+      elements.queryCollection.value = name;
+    }
+
+    function renderCollections(names) {
+      elements.collectionOptions.innerHTML = "";
+      elements.collectionsList.innerHTML = "";
+
+      names.forEach((name) => {
+        const option = document.createElement("option");
+        option.value = name;
+        elements.collectionOptions.appendChild(option);
+
+        const item = document.createElement("div");
+        item.className = "collection-item";
+
+        const title = document.createElement("span");
+        title.className = "collection-name";
+        title.textContent = name;
+
+        const useButton = document.createElement("button");
+        useButton.type = "button";
+        useButton.className = "secondary";
+        useButton.textContent = "Chon";
+        useButton.addEventListener("click", () => syncCollectionInputs(name));
+
+        item.appendChild(title);
+        item.appendChild(useButton);
+        elements.collectionsList.appendChild(item);
+      });
+    }
+
+    async function listCollections() {
+      const payload = await request("/collections");
+      renderCollections(payload.collections || []);
+      return payload;
+    }
+
+    document.getElementById("healthBtn").addEventListener("click", () => {
+      runAction("Health", () => request("/health"));
+    });
+
+    document.getElementById("listCollectionsBtn").addEventListener("click", () => {
+      runAction("List collections", listCollections);
+    });
+
+    document.getElementById("createCollectionBtn").addEventListener("click", () => {
+      runAction("Create collection", async () => {
+        const body = {
+          name: selectedCollection(),
+          description: elements.collectionDescription.value.trim() || null
+        };
+        const payload = await request("/collections", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+        });
+        await listCollections();
+        return payload;
+      });
+    });
+
+    document.getElementById("getCollectionBtn").addEventListener("click", () => {
+      runAction("Get collection", () => {
+        const name = encodeURIComponent(selectedCollection());
+        return request(`/collections/${name}`);
+      });
+    });
+
+    document.getElementById("deleteCollectionBtn").addEventListener("click", () => {
+      runAction("Delete collection", async () => {
+        const name = encodeURIComponent(selectedCollection());
+        const payload = await request(`/collections/${name}`, { method: "DELETE" });
+        await listCollections();
+        return payload;
+      });
+    });
+
+    document.getElementById("ingestBtn").addEventListener("click", () => {
+      runAction("Ingest", async () => {
+        const file = elements.csvFile.files[0];
+        if (!file) {
+          throw new Error("Chua chon file CSV.");
+        }
+
+        const formData = new FormData();
+        formData.append("file", file);
+        formData.append("index_column", elements.indexColumn.value.trim());
+        const collectionName = elements.ingestCollection.value.trim();
+        if (collectionName) {
+          formData.append("collection_name", collectionName);
+        }
+
+        const payload = await request("/ingest", {
+          method: "POST",
+          body: formData
+        });
+        await listCollections();
+        return payload;
+      });
+    });
+
+    document.getElementById("queryBtn").addEventListener("click", () => {
+      runAction("Query", () => {
+        const collectionName = encodeURIComponent(elements.queryCollection.value.trim());
+        const columns = elements.columnsToAnswer.value
+          .split(",")
+          .map((item) => item.trim())
+          .filter(Boolean);
+
+        const body = {
+          query: elements.ragQuery.value.trim(),
+          columns_to_answer: columns,
+          number_docs_retrieval: Number(elements.retrievalCount.value || 3)
+        };
+
+        return request(`/collections/${collectionName}/query`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+        });
+      });
+    });
+
+    document.getElementById("clearOutputBtn").addEventListener("click", () => {
+      writeOutput("San sang.");
+      setStatus("Chua ket noi", false);
+    });
+  </script>
+</body>
+</html>
