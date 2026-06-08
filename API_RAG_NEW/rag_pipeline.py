@@ -1,8 +1,44 @@
 from __future__ import annotations
 
 import re
-import uuid
+import hashlib
+import math
+from datetime import date, datetime
 from typing import Any, Sequence
+
+
+_INTERNAL_RECORD_ID_KEYS = {"id", "_id"}
+
+
+def stable_record_id(*parts: Any, prefix: str = "chunk", length: int = 32) -> str:
+    hasher = hashlib.sha256()
+    for part in parts:
+        hasher.update(str(part).encode("utf-8"))
+        hasher.update(b"\0")
+    return f"{prefix}_{hasher.hexdigest()[:length]}"
+
+
+def sanitize_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    sanitized: dict[str, Any] = {}
+    for key, value in metadata.items():
+        if key in _INTERNAL_RECORD_ID_KEYS or value is None:
+            continue
+
+        sanitized_key = str(key)
+        if isinstance(value, bool):
+            sanitized[sanitized_key] = value
+        elif isinstance(value, int):
+            sanitized[sanitized_key] = value
+        elif isinstance(value, float):
+            sanitized[sanitized_key] = value if math.isfinite(value) else str(value)
+        elif isinstance(value, str):
+            sanitized[sanitized_key] = value
+        elif isinstance(value, (date, datetime)):
+            sanitized[sanitized_key] = value.isoformat()
+        else:
+            sanitized[sanitized_key] = str(value)
+
+    return sanitized
 
 
 def add_records_to_collection(
@@ -12,11 +48,13 @@ def add_records_to_collection(
         return 0
 
     try:
-        embeddings = model.encode([record["chunk"] for record in records])
-        collection.add(
-            ids=[str(uuid.uuid4()) for _ in records],
+        documents = [str(record["chunk"]) for record in records]
+        embeddings = model.encode(documents)
+        collection.upsert(
+            ids=[_resolve_record_id(record) for record in records],
             embeddings=embeddings,
-            metadatas=[dict(record) for record in records],
+            documents=documents,
+            metadatas=[sanitize_metadata(record) for record in records],
         )
     except AttributeError as exc:
         if "encode" in str(exc):
@@ -28,6 +66,19 @@ def add_records_to_collection(
         raise RuntimeError(f"Error saving data to Chroma: {exc}") from exc
 
     return len(records)
+
+
+def _resolve_record_id(record: dict[str, Any]) -> str:
+    record_id = record.get("id") or record.get("_id")
+    if record_id:
+        return str(record_id)
+    return stable_record_id(
+        record.get("doc_id", ""),
+        record.get("source", ""),
+        record.get("source_type", ""),
+        record.get("chunk_index", ""),
+        record.get("chunk", ""),
+    )
 
 
 def clean_collection_name(name: str) -> str | None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import os
 import re
 import uuid
@@ -26,6 +27,7 @@ from API_RAG_NEW.config import (
 from API_RAG_NEW.rag_pipeline import (
     add_records_to_collection,
     clean_collection_name,
+    stable_record_id,
     vector_search,
 )
 from API_RAG_NEW.schemas import (
@@ -147,6 +149,7 @@ def ingest_file_content(
         )
 
     final_collection_name = _resolve_collection_name(file_name, requested_collection_name)
+    file_hash = _content_hash(raw_content)
     collection = CHROMA_CLIENT.get_or_create_collection(
         name=final_collection_name,
         metadata={"description": DEFAULT_COLLECTION_DESCRIPTION},
@@ -165,10 +168,26 @@ def ingest_file_content(
             )
         dataframe = _read_tabular_file(raw_content, extension, index_column)
         source_count = len(dataframe)
-        records = _iter_tabular_chunk_records(dataframe, index_column, chunker)
+        records = _iter_tabular_chunk_records(
+            dataframe,
+            index_column,
+            file_name,
+            extension,
+            file_hash,
+            chunker,
+        )
+    elif extension == ".pdf":
+        pages = _extract_pdf_pages(raw_content)
+        records = _iter_pdf_chunk_records(pages, file_name, extension, file_hash, chunker)
     else:
         text = _extract_document_text(file_name, raw_content, extension)
-        records = _iter_document_chunk_records(text, file_name, extension, chunker)
+        records = _iter_document_chunk_records(
+            text,
+            file_name,
+            extension,
+            file_hash,
+            chunker,
+        )
 
     for record in records:
         pending_records.append(record)
@@ -273,6 +292,14 @@ def _resolve_collection_name(
     return f"rag_collection_{base_name}_{uuid.uuid4().hex[:6]}"
 
 
+def _content_hash(raw_content: bytes) -> str:
+    return hashlib.sha256(raw_content).hexdigest()
+
+
+def _document_id(file_hash: str) -> str:
+    return f"doc_{file_hash[:32]}"
+
+
 def _read_tabular_file(
     raw_content: bytes,
     extension: str,
@@ -296,9 +323,7 @@ def _read_tabular_file(
             detail=f"Column '{index_column}' not found in {file_type} file.",
         )
 
-    dataframe = dataframe.copy()
-    dataframe["doc_id"] = [str(uuid.uuid4()) for _ in range(len(dataframe))]
-    return dataframe
+    return dataframe.copy()
 
 
 def _extract_document_text(file_name: str, raw_content: bytes, extension: str) -> str:
@@ -321,15 +346,19 @@ def _extract_document_text(file_name: str, raw_content: bytes, extension: str) -
 
 
 def _extract_pdf_text(raw_content: bytes) -> str:
-    pages: list[str] = []
+    return "\n\n".join(text for _, text in _extract_pdf_pages(raw_content))
+
+
+def _extract_pdf_pages(raw_content: bytes) -> list[tuple[int, str]]:
+    pages: list[tuple[int, str]] = []
     with pdfplumber.open(io.BytesIO(raw_content)) as pdf:
-        for page in pdf.pages:
+        for page_number, page in enumerate(pdf.pages, start=1):
             page_text = page.extract_text(x_tolerance=1, y_tolerance=3) or ""
             page_text = _clean_pdf_page_text(page_text)
             if page_text:
-                pages.append(page_text)
+                pages.append((page_number, page_text))
 
-    return "\n\n".join(pages)
+    return pages
 
 
 def _clean_pdf_page_text(text: str) -> str:
@@ -407,17 +436,19 @@ def _iter_document_chunk_records(
     text: str,
     file_name: str,
     extension: str,
+    file_hash: str,
     chunker: ProtonxSemanticChunker,
 ):
     if not text.strip():
         return
 
-    doc_id = str(uuid.uuid4())
+    doc_id = _document_id(file_hash)
     source_type = extension.lstrip(".")
     for chunk_index, chunk in enumerate(chunker.split_text(text), start=1):
         if not chunk.strip():
             continue
         yield {
+            "id": stable_record_id(doc_id, file_name, source_type, chunk_index, chunk),
             "chunk": chunk,
             "doc_id": doc_id,
             "source": file_name,
@@ -426,12 +457,66 @@ def _iter_document_chunk_records(
         }
 
 
+def _iter_pdf_chunk_records(
+    pages: list[tuple[int, str]],
+    file_name: str,
+    extension: str,
+    file_hash: str,
+    chunker: ProtonxSemanticChunker,
+):
+    doc_id = _document_id(file_hash)
+    source_type = extension.lstrip(".")
+    chunk_index = 0
+    for page_number, page_text in pages:
+        page_chunk_index = 0
+        for chunk in chunker.split_text(page_text):
+            if not chunk.strip():
+                continue
+            chunk_index += 1
+            page_chunk_index += 1
+            yield {
+                "id": stable_record_id(
+                    doc_id,
+                    file_name,
+                    source_type,
+                    page_number,
+                    page_chunk_index,
+                    chunk,
+                ),
+                "chunk": chunk,
+                "doc_id": doc_id,
+                "source": file_name,
+                "source_type": source_type,
+                "chunk_index": chunk_index,
+                "page_number": page_number,
+                "page_chunk_index": page_chunk_index,
+            }
+
+
 def _iter_tabular_chunk_records(
     dataframe: pd.DataFrame,
     index_column: str,
+    file_name: str,
+    extension: str,
+    file_hash: str,
     chunker: ProtonxSemanticChunker,
 ):
-    for _, row in dataframe.iterrows():
+    source_type = extension.lstrip(".")
+    reserved_metadata_keys = {
+        "id",
+        "_id",
+        "chunk",
+        "doc_id",
+        "source",
+        "source_type",
+        "chunk_index",
+        "row_index",
+        "row_chunk_index",
+        "page_number",
+        "page_chunk_index",
+    }
+    chunk_index = 0
+    for row_index, row in dataframe.reset_index(drop=True).iterrows():
         row_data = {
             key: _normalize_dataframe_value(value)
             for key, value in row.to_dict().items()
@@ -440,20 +525,41 @@ def _iter_tabular_chunk_records(
         if not isinstance(text, str) or not text.strip():
             continue
 
+        row_doc_id = stable_record_id("row", file_hash, row_index, prefix="doc")
+        row_chunk_index = 0
         for chunk in chunker.split_text(text):
             if not chunk.strip():
                 continue
+            chunk_index += 1
+            row_chunk_index += 1
             yield {
+                "id": stable_record_id(
+                    row_doc_id,
+                    file_name,
+                    source_type,
+                    row_index,
+                    row_chunk_index,
+                    chunk,
+                ),
                 "chunk": chunk,
+                "doc_id": row_doc_id,
+                "source": file_name,
+                "source_type": source_type,
+                "chunk_index": chunk_index,
+                "row_index": int(row_index),
+                "row_chunk_index": row_chunk_index,
                 **{
                     key: value
                     for key, value in row_data.items()
-                    if key not in {"chunk", "_id"}
+                    if key not in reserved_metadata_keys
                 },
             }
 
 
 def _normalize_dataframe_value(value: Any) -> Any:
-    if pd.isna(value):
-        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
     return value
