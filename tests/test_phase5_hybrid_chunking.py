@@ -488,3 +488,10 @@ def test_records_modal_prefers_metadata_chunk_then_document_fallback():
     assert "const documents = Array.isArray(payload.documents) ? payload.documents : [];" in html
     assert "const documentChunk = documents[index];" in html
     assert html.index("metadata && metadata.chunk") < html.index(": documentChunk")
+    assert "chunking_profile" in html
+    assert "chunk_stats" in html
+    assert "skipped_flattened_table_chunks" in html
+    assert "chunk_type" in html
+    assert "section_path" in html
+    assert "table_row_part_index" in html
+    assert "rag_chunking_profile" in html

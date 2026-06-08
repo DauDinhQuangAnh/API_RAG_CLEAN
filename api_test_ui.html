@@ -395,6 +395,66 @@
       border-color: transparent;
     }
 
+    .summary-panel {
+      display: none;
+      margin-bottom: 10px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel-soft);
+      padding: 12px;
+    }
+
+    .summary-panel.active {
+      display: block;
+    }
+
+    .summary-title {
+      margin-bottom: 8px;
+      font-weight: 700;
+    }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .summary-card {
+      min-height: 58px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #fff;
+      padding: 9px;
+    }
+
+    .summary-card span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .summary-card strong {
+      display: block;
+      margin-top: 4px;
+      overflow-wrap: anywhere;
+      font-size: 15px;
+    }
+
+    .warning-list {
+      display: grid;
+      gap: 6px;
+      margin-top: 10px;
+    }
+
+    .warning-item {
+      border-left: 3px solid var(--accent);
+      background: #fff8ed;
+      padding: 8px 10px;
+      color: #5f3c0d;
+      overflow-wrap: anywhere;
+    }
+
     .compact {
       margin-top: 10px;
     }
@@ -433,6 +493,13 @@
       margin-bottom: 10px;
     }
 
+    .modal-filters {
+      display: grid;
+      grid-template-columns: minmax(180px, 0.35fr) minmax(0, 1fr);
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
     .chunk-list {
       display: grid;
       gap: 10px;
@@ -462,6 +529,29 @@
       overflow-wrap: anywhere;
     }
 
+    .badge-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+
+    .badge {
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: #fff;
+      color: var(--text);
+      padding: 3px 8px;
+      font-size: 12px;
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+
+    .badge strong {
+      color: var(--muted);
+      font-weight: 700;
+    }
+
     .chunk-text {
       white-space: pre-wrap;
       overflow-wrap: anywhere;
@@ -488,6 +578,11 @@
       }
 
       .quick-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .summary-grid,
+      .modal-filters {
         grid-template-columns: 1fr;
       }
     }
@@ -658,6 +753,7 @@
           <button id="modeRetrievedBtn" type="button" class="secondary">Retrieved</button>
           <button id="modePromptBtn" type="button" class="secondary">Prompt</button>
         </div>
+        <div id="outputSummary" class="summary-panel"></div>
         <pre id="output" class="output">San sang.</pre>
         <div class="actions">
           <button id="clearOutputBtn" type="button" class="secondary">Xoa ket qua</button>
@@ -673,6 +769,22 @@
         <button id="closeRecordsModalBtn" type="button" class="ghost">Dong</button>
       </div>
       <div id="recordsModalMeta" class="modal-meta"></div>
+      <div class="modal-filters">
+        <label>
+          Chunk Type
+          <select id="recordsChunkTypeFilter">
+            <option value="all">all</option>
+            <option value="section_child">section_child</option>
+            <option value="table_row">table_row</option>
+            <option value="fallback_semantic">fallback_semantic</option>
+            <option value="semantic">semantic</option>
+          </select>
+        </label>
+        <label>
+          Search
+          <input id="recordsSearchFilter" placeholder="Search chunk text or metadata" autocomplete="off">
+        </label>
+      </div>
       <div id="recordsModalBody" class="chunk-list"></div>
     </section>
   </div>
@@ -685,6 +797,7 @@
       collectionCountLabel: document.getElementById("collectionCountLabel"),
       serverStateLabel: document.getElementById("serverStateLabel"),
       output: document.getElementById("output"),
+      outputSummary: document.getElementById("outputSummary"),
       collectionSelect: document.getElementById("collectionSelect"),
       collectionName: document.getElementById("collectionName"),
       collectionDescription: document.getElementById("collectionDescription"),
@@ -707,13 +820,16 @@
       recordsModal: document.getElementById("recordsModal"),
       recordsModalTitle: document.getElementById("recordsModalTitle"),
       recordsModalMeta: document.getElementById("recordsModalMeta"),
-      recordsModalBody: document.getElementById("recordsModalBody")
+      recordsModalBody: document.getElementById("recordsModalBody"),
+      recordsChunkTypeFilter: document.getElementById("recordsChunkTypeFilter"),
+      recordsSearchFilter: document.getElementById("recordsSearchFilter")
     };
 
     const state = {
       collections: [],
       selectedCollection: localStorage.getItem("ragSelectedCollection") || "",
       lastPayload: null,
+      recordsPayload: null,
       outputMode: "raw",
       ingestStartedAt: 0,
       ingestTimer: null
@@ -774,6 +890,113 @@
       return JSON.stringify(data, null, 2);
     }
 
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
+    function displayValue(value) {
+      return value === undefined || value === null || value === "" ? "N/A" : String(value);
+    }
+
+    function labelForKey(key) {
+      const labels = {
+        rag_chunking_profile: "Chunking Profile",
+        chunking_profile: "Chunking Profile",
+        collection_name: "Collection",
+        total_chunks: "Total chunks",
+        semantic_chunks: "Semantic chunks",
+        table_chunks: "Table chunks",
+        skipped_flattened_table_chunks: "Skipped flattened table chunks",
+        avg_chunk_chars: "Avg chunk chars",
+        small_chunks: "Small chunks",
+        large_chunks: "Large chunks",
+        pages: "Pages",
+        profile: "Profile",
+        chunk_type: "Chunk Type",
+        section_title: "Section",
+        section_path: "Section",
+        table_title: "Table",
+        table_row_index: "Table Row",
+        table_row_part_index: "Part",
+        parent_id: "Parent ID",
+        block_index: "Block",
+        page_number: "Page",
+        row_index: "Row",
+        chunk_index: "Chunk",
+        page_chunk_index: "Page Chunk",
+        table_index: "Table Index"
+      };
+      return labels[key] || key;
+    }
+
+    function summaryCard(label, value) {
+      return `<div class="summary-card"><span>${escapeHtml(label)}</span><strong>${escapeHtml(displayValue(value))}</strong></div>`;
+    }
+
+    function renderOutputSummary(payload) {
+      elements.outputSummary.classList.remove("active");
+      elements.outputSummary.innerHTML = "";
+      if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+        return;
+      }
+
+      if ("rag_chunking_profile" in payload) {
+        const cards = [
+          summaryCard("Chunking Profile", payload.rag_chunking_profile),
+          summaryCard("Initial top-k", payload.rag_initial_top_k),
+          summaryCard("Final top-n", payload.rag_final_top_n),
+          summaryCard("Reranker", payload.rag_reranker_type),
+          summaryCard("Gemini model", payload.gemini_model),
+          summaryCard("Embedding model", payload.embedding_model_name)
+        ].join("");
+        elements.outputSummary.innerHTML = `<div class="summary-title">Runtime Config</div><div class="summary-grid">${cards}</div>`;
+        elements.outputSummary.classList.add("active");
+        return;
+      }
+
+      if ("collection_name" in payload && "chunks" in payload && "rows" in payload) {
+        const stats = payload.chunk_stats && typeof payload.chunk_stats === "object"
+          ? payload.chunk_stats
+          : {};
+        const topCards = [
+          summaryCard("Collection", payload.collection_name),
+          summaryCard("Rows", payload.rows),
+          summaryCard("Chunks", payload.chunks),
+          summaryCard("Chunking Profile", payload.chunking_profile)
+        ].join("");
+        const statKeys = [
+          "total_chunks",
+          "semantic_chunks",
+          "table_chunks",
+          "skipped_flattened_table_chunks",
+          "avg_chunk_chars",
+          "small_chunks",
+          "large_chunks",
+          "pages",
+          "profile"
+        ];
+        const statCards = statKeys
+          .map((key) => summaryCard(labelForKey(key), stats[key]))
+          .join("");
+        const warnings = Array.isArray(payload.warnings) && payload.warnings.length
+          ? `<div class="warning-list">${payload.warnings.map((warning) => `<div class="warning-item">${escapeHtml(warning)}</div>`).join("")}</div>`
+          : "";
+        elements.outputSummary.innerHTML = [
+          `<div class="summary-title">Ingest Result</div>`,
+          `<div class="summary-grid">${topCards}</div>`,
+          `<div class="summary-title compact">chunk_stats</div>`,
+          `<div class="summary-grid">${statCards}</div>`,
+          warnings
+        ].join("");
+        elements.outputSummary.classList.add("active");
+      }
+    }
+
     function valueFromPayload(payload, key) {
       if (!payload || typeof payload !== "object") {
         return "";
@@ -793,19 +1016,33 @@
         const location = citation.row_index
           ? `row=${citation.row_index}`
           : `page=${citation.page_number ?? "N/A"}`;
-        const meta = [
+        const metaParts = [
           `source=${citation.source ?? "N/A"}`,
           `source_type=${citation.source_type ?? "N/A"}`,
           location,
           `chunk_index=${citation.chunk_index ?? "N/A"}`,
           `doc_id=${citation.doc_id ?? "N/A"}`
-        ].join(" | ");
+        ];
+        [
+          ["chunk_type", "Chunk Type"],
+          ["section_title", "Section"],
+          ["section_path", "Section"],
+          ["table_title", "Table"],
+          ["table_row_index", "Table Row"],
+          ["table_row_part_index", "Part"]
+        ].forEach(([key, label]) => {
+          if (citation[key] !== undefined && citation[key] !== null && citation[key] !== "") {
+            metaParts.push(`${label}=${citation[key]}`);
+          }
+        });
+        const meta = metaParts.join(" | ");
         return `[${citation.id}] ${meta}\n${citation.snippet || ""}`;
       }).join("\n\n");
     }
 
     function renderOutput() {
       const payload = state.lastPayload;
+      renderOutputSummary(payload);
       if (!payload) {
         elements.output.textContent = "San sang.";
         return;
@@ -1091,13 +1328,57 @@
       elements.recordsModal.classList.add("active");
     }
 
-    function renderRecordsModal(payload) {
+    function chunkTextForRecord(metadata, documentChunk) {
+      return metadata && metadata.chunk
+        ? metadata.chunk
+        : documentChunk
+        ? documentChunk
+        : formatData(metadata);
+    }
+
+    function metadataBadge(label, value) {
+      if (value === undefined || value === null || value === "") {
+        return "";
+      }
+      return `<span class="badge"><strong>${escapeHtml(label)}:</strong> ${escapeHtml(value)}</span>`;
+    }
+
+    function recordMatchesFilters(metadata, id, documentChunk) {
+      const chunkType = elements.recordsChunkTypeFilter.value || "all";
+      if (chunkType !== "all" && (!metadata || metadata.chunk_type !== chunkType)) {
+        return false;
+      }
+
+      const search = elements.recordsSearchFilter.value.trim().toLowerCase();
+      if (!search) {
+        return true;
+      }
+
+      const haystack = [
+        id,
+        chunkTextForRecord(metadata, documentChunk),
+        formatData(metadata)
+      ].join("\n").toLowerCase();
+      return haystack.includes(search);
+    }
+
+    function renderRecordsModal(payload, resetFilters = true) {
+      state.recordsPayload = payload;
+      if (resetFilters) {
+        elements.recordsChunkTypeFilter.value = "all";
+        elements.recordsSearchFilter.value = "";
+      }
+
       const metadatas = Array.isArray(payload.metadatas) ? payload.metadatas : [];
       const ids = Array.isArray(payload.ids) ? payload.ids : [];
       const documents = Array.isArray(payload.documents) ? payload.documents : [];
       const total = payload.count ?? metadatas.length;
       elements.recordsModalTitle.textContent = `Chunks - ${payload.collection_name || selectedCollection()}`;
-      elements.recordsModalMeta.textContent = `Dang hien thi ${metadatas.length}/${total} chunks`;
+      const visibleIndexes = metadatas
+        .map((metadata, index) => ({ metadata, index }))
+        .filter(({ metadata, index }) => recordMatchesFilters(metadata, ids[index] || "", documents[index]))
+        .map(({ index }) => index);
+      elements.recordsModalMeta.textContent = `Dang hien thi ${visibleIndexes.length}/${total} chunks`;
       elements.recordsModalBody.innerHTML = "";
 
       if (!metadatas.length) {
@@ -1109,7 +1390,17 @@
         return;
       }
 
-      metadatas.forEach((metadata, index) => {
+      if (!visibleIndexes.length) {
+        const empty = document.createElement("div");
+        empty.className = "subtle";
+        empty.textContent = "Khong co chunk nao khop bo loc.";
+        elements.recordsModalBody.appendChild(empty);
+        openRecordsModal();
+        return;
+      }
+
+      visibleIndexes.forEach((index) => {
+        const metadata = metadatas[index];
         const item = document.createElement("article");
         item.className = "chunk-item";
 
@@ -1135,18 +1426,34 @@
           .filter(Boolean)
           .join(" | ");
 
+        const badges = document.createElement("div");
+        badges.className = "badge-list";
+        badges.innerHTML = [
+          metadataBadge("Chunk Type", metadata && metadata.chunk_type),
+          metadataBadge("Page", metadata && metadata.page_number),
+          metadataBadge("Row", metadata && metadata.row_index),
+          metadataBadge("Chunk", metadata && metadata.chunk_index),
+          metadataBadge("Page Chunk", metadata && metadata.page_chunk_index),
+          metadataBadge("Section", metadata && (metadata.section_path || metadata.section_title)),
+          metadataBadge("Table", metadata && metadata.table_title),
+          metadataBadge("Table Index", metadata && metadata.table_index),
+          metadataBadge("Table Row", metadata && metadata.table_row_index),
+          metadataBadge("Part", metadata && metadata.table_row_part_index),
+          metadataBadge("Parent ID", metadata && metadata.parent_id),
+          metadataBadge("Block", metadata && metadata.block_index)
+        ].filter(Boolean).join("");
+
         const text = document.createElement("div");
         text.className = "chunk-text";
         const documentChunk = documents[index];
-        text.textContent = metadata && metadata.chunk
-          ? metadata.chunk
-          : documentChunk
-          ? documentChunk
-          : formatData(metadata);
+        text.textContent = chunkTextForRecord(metadata, documentChunk);
 
         item.appendChild(title);
         if (meta.textContent) {
           item.appendChild(meta);
+        }
+        if (badges.innerHTML) {
+          item.appendChild(badges);
         }
         item.appendChild(text);
         elements.recordsModalBody.appendChild(item);
@@ -1275,6 +1582,18 @@
         const payload = await request(`/collections/${name}/records?limit=${limit}&offset=${offset}`);
         renderRecordsModal(payload);
       });
+    });
+
+    elements.recordsChunkTypeFilter.addEventListener("change", () => {
+      if (state.recordsPayload) {
+        renderRecordsModal(state.recordsPayload, false);
+      }
+    });
+
+    elements.recordsSearchFilter.addEventListener("input", () => {
+      if (state.recordsPayload) {
+        renderRecordsModal(state.recordsPayload, false);
+      }
     });
 
     document.getElementById("deleteCollectionBtn").addEventListener("click", () => {
