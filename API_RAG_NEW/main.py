@@ -1,7 +1,10 @@
 from __future__ import annotations
 
-from fastapi import FastAPI, File, Form, Query, UploadFile
+from pathlib import Path
+
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 from API_RAG_NEW import services
 from API_RAG_NEW.config import ALLOWED_ORIGINS, ROOT_PATH
@@ -30,6 +33,19 @@ app.add_middleware(
 @app.get("/health")
 def health() -> dict[str, str]:
     return services.health_payload()
+
+
+@app.get("/runtime-config")
+def runtime_config() -> dict[str, object]:
+    return services.runtime_config_payload()
+
+
+@app.get("/ui", include_in_schema=False)
+def local_ui() -> FileResponse:
+    ui_path = Path(__file__).resolve().parent.parent / "api_test_ui.html"
+    if not ui_path.exists():
+        raise HTTPException(status_code=404, detail="api_test_ui.html not found")
+    return FileResponse(ui_path)
 
 
 @app.get("/collections")
@@ -82,6 +98,8 @@ async def ingest_file(
     collection_name: str | None = Form(None),
 ) -> IngestResponse:
     raw_content = await file.read()
+    if not raw_content:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
     return services.ingest_file_content(
         file.filename or "upload.csv",
         raw_content,

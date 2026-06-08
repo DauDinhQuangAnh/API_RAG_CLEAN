@@ -516,6 +516,7 @@
               <input id="baseUrl" value="http://127.0.0.1:8000" autocomplete="off">
             </label>
             <button id="healthBtn" type="button">Health</button>
+            <button id="runtimeConfigBtn" type="button" class="secondary">Runtime config</button>
           </div>
           <div class="quick-grid">
             <div class="metric">
@@ -554,6 +555,20 @@
             Mo ta
             <input id="collectionDescription" placeholder="Demo collection" autocomplete="off">
           </label>
+          <div class="row three">
+            <label>
+              Collection xem chunks
+              <input id="recordCollectionName" placeholder="Dung collection dang chon" autocomplete="off">
+            </label>
+            <label>
+              Limit
+              <input id="recordsLimit" type="number" min="1" max="5000" value="200">
+            </label>
+            <label>
+              Offset
+              <input id="recordsOffset" type="number" min="0" value="0">
+            </label>
+          </div>
           <div class="actions">
             <button id="createCollectionBtn" type="button">Tao collection</button>
             <button id="getCollectionBtn" type="button" class="secondary">Xem thong tin</button>
@@ -639,6 +654,7 @@
         <div class="mode-bar">
           <button id="modeRawBtn" type="button" class="secondary active">Raw</button>
           <button id="modeAnswerBtn" type="button" class="secondary">Answer</button>
+          <button id="modeCitationsBtn" type="button" class="secondary">Citations</button>
           <button id="modeRetrievedBtn" type="button" class="secondary">Retrieved</button>
           <button id="modePromptBtn" type="button" class="secondary">Prompt</button>
         </div>
@@ -672,6 +688,9 @@
       collectionSelect: document.getElementById("collectionSelect"),
       collectionName: document.getElementById("collectionName"),
       collectionDescription: document.getElementById("collectionDescription"),
+      recordCollectionName: document.getElementById("recordCollectionName"),
+      recordsLimit: document.getElementById("recordsLimit"),
+      recordsOffset: document.getElementById("recordsOffset"),
       collectionsList: document.getElementById("collectionsList"),
       uploadFile: document.getElementById("uploadFile"),
       indexColumn: document.getElementById("indexColumn"),
@@ -731,6 +750,7 @@
           select.value = "";
         }
       });
+      elements.recordCollectionName.value = state.selectedCollection;
 
       renderCollectionList();
     }
@@ -761,6 +781,29 @@
       return payload[key] || "";
     }
 
+    function formatCitations(payload) {
+      const citations = payload && Array.isArray(payload.citations)
+        ? payload.citations
+        : [];
+      if (!citations.length) {
+        return "Khong co citations trong response.";
+      }
+
+      return citations.map((citation) => {
+        const location = citation.row_index
+          ? `row=${citation.row_index}`
+          : `page=${citation.page_number ?? "N/A"}`;
+        const meta = [
+          `source=${citation.source ?? "N/A"}`,
+          `source_type=${citation.source_type ?? "N/A"}`,
+          location,
+          `chunk_index=${citation.chunk_index ?? "N/A"}`,
+          `doc_id=${citation.doc_id ?? "N/A"}`
+        ].join(" | ");
+        return `[${citation.id}] ${meta}\n${citation.snippet || ""}`;
+      }).join("\n\n");
+    }
+
     function renderOutput() {
       const payload = state.lastPayload;
       if (!payload) {
@@ -770,6 +813,11 @@
 
       if (state.outputMode === "answer") {
         elements.output.textContent = valueFromPayload(payload, "answer") || formatData(payload);
+        return;
+      }
+
+      if (state.outputMode === "citations") {
+        elements.output.textContent = formatCitations(payload);
         return;
       }
 
@@ -1177,6 +1225,10 @@
       runAction("Health", () => request("/health"));
     });
 
+    document.getElementById("runtimeConfigBtn").addEventListener("click", () => {
+      runAction("Runtime config", () => request("/runtime-config"));
+    });
+
     document.getElementById("listCollectionsBtn").addEventListener("click", () => {
       runAction("List collections", listCollections);
     });
@@ -1212,10 +1264,11 @@
 
     document.getElementById("getRecordsBtn").addEventListener("click", () => {
       runSilentAction("Get chunks", async () => {
-        const name = encodeURIComponent(ensureCollectionName(selectedCollection()));
-        const info = await request(`/collections/${name}`);
-        const count = Math.min(Number(info.count || 0), 5000);
-        const payload = await request(`/collections/${name}/records?limit=${Math.max(count, 1)}&offset=0`);
+        const selectedName = elements.recordCollectionName.value.trim() || selectedCollection();
+        const name = encodeURIComponent(ensureCollectionName(selectedName));
+        const limit = Math.min(Math.max(Number(elements.recordsLimit.value || 200), 1), 5000);
+        const offset = Math.max(Number(elements.recordsOffset.value || 0), 0);
+        const payload = await request(`/collections/${name}/records?limit=${limit}&offset=${offset}`);
         renderRecordsModal(payload);
       });
     });
@@ -1336,6 +1389,7 @@
 
     document.getElementById("modeRawBtn").addEventListener("click", () => setOutputMode("raw"));
     document.getElementById("modeAnswerBtn").addEventListener("click", () => setOutputMode("answer"));
+    document.getElementById("modeCitationsBtn").addEventListener("click", () => setOutputMode("citations"));
     document.getElementById("modeRetrievedBtn").addEventListener("click", () => setOutputMode("retrieved"));
     document.getElementById("modePromptBtn").addEventListener("click", () => setOutputMode("prompt"));
 

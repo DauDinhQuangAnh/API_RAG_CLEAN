@@ -214,6 +214,38 @@ Example response:
 }
 ```
 
+## Phase 4 - Local UI and API Polish
+
+Phase 4 them local UI va cac endpoint debug an toan de demo/dev tren may local. Phase nay khong them production auth, OAuth, JWT, database users, Docker, hay cloud deployment.
+
+Chay server local:
+
+```bash
+.\python\python.exe -m uvicorn API_RAG_NEW.main:app --host 0.0.0.0 --port 8000
+```
+
+Mo UI local:
+
+- `http://127.0.0.1:8000/ui`
+- Hoac mo truc tiep file `api_test_ui.html` trong browser va giu Base URL la `http://127.0.0.1:8000`.
+
+UI ho tro health check, runtime config, list/create/delete collection, ingest file, xem records/chunks, query RAG, xem answer, citations, retrieved data, metadata, va full prompt.
+
+Tao file `.env` tu `.env.example`:
+
+```env
+GEMINI_API_KEY=replace_with_your_key
+GEMINI_MODEL=gemini-2.5-flash
+CHROMA_DB_PATH=db
+RAG_INITIAL_TOP_K=20
+RAG_FINAL_TOP_N=6
+RAG_INCLUDE_NEIGHBORS=true
+RAG_RERANKER_TYPE=llm
+RAG_CORS_ORIGINS=*
+```
+
+`GET /runtime-config` tra ve config runtime khong chua secret, gom top-k retrieval, final top-n, neighbor expansion, reranker type, Gemini model, embedding model dang dung, Chroma path, va CORS origins. Endpoint nay khong tra `GEMINI_API_KEY`.
+
 ## Roadmap
 
-Phase 3 citations da duoc implement. Phase 4 local UI/API polish dang duoc len ke hoach, chua duoc implement trong code hien tai.
+Phase 4 local UI/API polish da duoc implement. Production auth/deployment va UI day du hon se nam o phase rieng neu can.

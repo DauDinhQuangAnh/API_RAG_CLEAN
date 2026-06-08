@@ -17,7 +17,10 @@ from llms.onlinellms import OnlineLLMs
 
 from API_RAG_NEW.citations import build_citations_from_metadatas
 from API_RAG_NEW.config import (
+    ACTIVE_EMBEDDING_MODEL_NAME,
+    ALLOWED_ORIGINS,
     CHROMA_CLIENT,
+    CHROMA_DB_PATH,
     DEFAULT_COLLECTION_DESCRIPTION,
     EMBEDDING_MODEL,
     GEMINI_MODEL,
@@ -48,6 +51,19 @@ from API_RAG_NEW.schemas import (
 
 def health_payload() -> dict[str, str]:
     return {"status": "ok"}
+
+
+def runtime_config_payload() -> dict[str, object]:
+    return {
+        "rag_initial_top_k": RAG_INITIAL_TOP_K,
+        "rag_final_top_n": RAG_FINAL_TOP_N,
+        "rag_include_neighbors": RAG_INCLUDE_NEIGHBORS,
+        "rag_reranker_type": RAG_RERANKER_TYPE,
+        "gemini_model": GEMINI_MODEL,
+        "embedding_model_name": ACTIVE_EMBEDDING_MODEL_NAME,
+        "chroma_db_path": CHROMA_DB_PATH,
+        "cors_origins": ALLOWED_ORIGINS,
+    }
 
 
 def list_collections() -> dict[str, list[str]]:
@@ -223,6 +239,9 @@ def ingest_file_content(
 
 
 def query_collection(collection_name: str, req: QueryRequest) -> QueryResponse:
+    if not req.query.strip():
+        raise HTTPException(status_code=400, detail="Query must not be empty.")
+
     collection = _get_collection_or_404(collection_name)
     final_n = _resolve_final_docs_retrieval(req)
     rerank_llm = _build_optional_rerank_llm()
