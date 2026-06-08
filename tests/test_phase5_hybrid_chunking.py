@@ -11,6 +11,7 @@ from API_RAG_NEW import services
 from API_RAG_NEW.document_structure import (
     BLOCK_TABLE_ROW,
     build_logical_blocks,
+    clean_table_title,
     detect_heading,
     detect_table_caption,
     is_bullet,
@@ -148,6 +149,29 @@ def test_table_row_conversion_uses_headers_and_skips_empty_rows():
     assert "Weave Carbon: M\u00e3 b\u0103m SHA-256" in block.text
 
 
+def test_clean_table_title_trims_flattened_headers_and_caps_length():
+    first = (
+        "B\u1ea3ng 2. \u0110i\u1ec3m kh\u00e1c bi\u1ec7t so v\u1edbi "
+        "gi\u1ea3i ph\u00e1p hi\u1ec7n c\u00f3 C\u00e1ch l\u00e0m hi\u1ec7n "
+        "t\u1ea1i/gi\u1ea3i ph\u00e1p Ti\u00eau ch\u00ed Weave Carbon kh\u00e1c "
+        "T\u1eadp trung d\u1eef li\u1ec7u..."
+    )
+    second = (
+        "B\u1ea3ng 1. Value Proposition Canvas c\u1ee7a Weave Carbon "
+        "Th\u00e0nh ph\u1ea7n N\u1ed9i dung Customer Jobs..."
+    )
+    very_long = "Table 9. " + ("Long title words " * 20)
+
+    assert clean_table_title(first) == (
+        "B\u1ea3ng 2. \u0110i\u1ec3m kh\u00e1c bi\u1ec7t so v\u1edbi "
+        "gi\u1ea3i ph\u00e1p hi\u1ec7n c\u00f3"
+    )
+    assert clean_table_title(second) == (
+        "B\u1ea3ng 1. Value Proposition Canvas c\u1ee7a Weave Carbon"
+    )
+    assert len(clean_table_title(very_long)) <= 120
+
+
 def test_hybrid_pdf_records_include_old_and_phase5_metadata():
     records = list(
         services._iter_hybrid_pdf_chunk_records(
@@ -182,8 +206,12 @@ def test_hybrid_pdf_records_include_old_and_phase5_metadata():
     assert record["parent_id"].startswith("parent_")
 
 
-def test_hybrid_pdf_table_records_include_row_metadata():
-    table_title = "B\u1ea3ng 2. So s\u00e1nh gi\u1ea3i ph\u00e1p"
+def test_hybrid_pdf_table_records_include_row_metadata_and_clean_title():
+    table_title = (
+        "B\u1ea3ng 2. So s\u00e1nh gi\u1ea3i ph\u00e1p C\u00e1ch l\u00e0m "
+        "hi\u1ec7n t\u1ea1i Ti\u00eau ch\u00ed Weave Carbon"
+    )
+    cleaned_title = "B\u1ea3ng 2. So s\u00e1nh gi\u1ea3i ph\u00e1p"
     records = list(
         services._iter_hybrid_pdf_chunk_records(
             [
@@ -212,11 +240,140 @@ def test_hybrid_pdf_table_records_include_row_metadata():
     record = records[0]
     assert record["chunk_type"] == "table_row"
     assert record["table_index"] == 1
-    assert record["table_title"] == table_title
+    assert record["table_title"] == cleaned_title
     assert record["table_row_index"] == 1
     assert record["page_number"] == 4
     assert record["section_path"] == "II. Project > 5. Solution"
+    assert f"Table: {cleaned_title}" in record["chunk"]
     assert "Criteria: Reliability" in record["chunk"]
+
+
+def test_oversized_table_row_chunks_split_with_part_metadata():
+    long_a = "A " * 700
+    long_b = "B " * 700
+    long_c = "C " * 700
+    records = list(
+        services._iter_hybrid_pdf_chunk_records(
+            [
+                {
+                    "page_number": 3,
+                    "text": "Table 1. Long row details",
+                    "tables": [
+                        {
+                            "table_index": 1,
+                            "rows": [
+                                ["First", "Second", "Third"],
+                                [long_a, long_b, long_c],
+                            ],
+                        }
+                    ],
+                }
+            ],
+            "demo.pdf",
+            ".pdf",
+            "d" * 64,
+            IdentityChunker(),
+        )
+    )
+
+    assert len(records) >= 2
+    assert all(record["chunk_type"] == "table_row" for record in records)
+    assert {record["table_row_index"] for record in records} == {1}
+    assert [record["table_row_part_index"] for record in records] == list(
+        range(1, len(records) + 1)
+    )
+    assert all(record["table_index"] == 1 for record in records)
+    assert all(record["table_title"] == "Table 1. Long row details" for record in records)
+    assert all(len(record["chunk"]) <= 2000 for record in records)
+
+
+def test_hybrid_pdf_skips_obvious_flattened_table_semantic_but_keeps_paragraph():
+    cleanup_stats = {"skipped_flattened_table_chunks": 0}
+    records = list(
+        services._iter_hybrid_pdf_chunk_records(
+            [
+                {
+                    "page_number": 4,
+                    "text": "\n".join(
+                        [
+                            "II. Project",
+                            "5. Solution",
+                            "Project summary explains market, business model, and solution. || Criteria Current Weave Carbon Reliability No audit trail SHA-256 audit",
+                            "Table 1. Solution comparison",
+                        ]
+                    ),
+                    "tables": [
+                        {
+                            "table_index": 1,
+                            "rows": [
+                                ["Criteria", "Current", "Weave Carbon"],
+                                ["Reliability", "No audit trail", "SHA-256 audit"],
+                            ],
+                        }
+                    ],
+                }
+            ],
+            "demo.pdf",
+            ".pdf",
+            "e" * 64,
+            PipeChunker(),
+            cleanup_stats=cleanup_stats,
+        )
+    )
+
+    semantic_chunks = [
+        record["chunk"] for record in records if record["chunk_type"] != "table_row"
+    ]
+    table_chunks = [
+        record["chunk"] for record in records if record["chunk_type"] == "table_row"
+    ]
+    assert cleanup_stats["skipped_flattened_table_chunks"] == 1
+    assert any("Project summary explains market" in chunk for chunk in semantic_chunks)
+    assert not any("Criteria Current Weave Carbon Reliability" in chunk for chunk in semantic_chunks)
+    assert table_chunks
+
+
+def test_ingest_chunk_stats_reports_skipped_flattened_table_chunks(monkeypatch):
+    fake_client = FakeChromaClient()
+    monkeypatch.setattr(services, "CHROMA_CLIENT", fake_client)
+    monkeypatch.setattr(services, "EMBEDDING_MODEL", FakeEmbeddingModel())
+    monkeypatch.setattr(services, "ProtonxSemanticChunker", lambda model: PipeChunker())
+    monkeypatch.setattr(services, "RAG_CHUNKING_PROFILE", "hybrid")
+    monkeypatch.setattr(
+        services,
+        "_extract_pdf_pages_with_tables",
+        lambda raw_content: [
+            {
+                "page_number": 1,
+                "text": "\n".join(
+                    [
+                        "I. Overview",
+                        "Normal paragraph about project summary. || Criteria Current Weave Carbon Reliability No audit trail SHA-256 audit",
+                        "Table 1. Solution comparison",
+                    ]
+                ),
+                "tables": [
+                    {
+                        "table_index": 1,
+                        "rows": [
+                            ["Criteria", "Current", "Weave Carbon"],
+                            ["Reliability", "No audit trail", "SHA-256 audit"],
+                        ],
+                    }
+                ],
+            }
+        ],
+    )
+
+    response = services.ingest_file_content(
+        "demo.pdf",
+        b"patched extractor",
+        "phase5-cleanup-stats",
+    )
+
+    assert response.chunk_stats["skipped_flattened_table_chunks"] == 1
+    assert response.chunk_stats["table_chunks"] == 1
+    assert response.chunk_stats["semantic_chunks"] == 1
 
 
 def test_semantic_profile_ingest_preserves_old_metadata(monkeypatch):

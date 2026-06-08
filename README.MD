@@ -8,7 +8,7 @@ python -m venv .venv
 pip install -r requirements.txt
 uvicorn API_RAG_NEW.main:app --host 0.0.0.0 --port 8000
 ```
-
+cd "D:\AI RAG\API_RAG_NEW" ; .\.venv\Scripts\python.exe -m pytest tests
 Hoac dung Python portable trong repo:
 
 ```bash

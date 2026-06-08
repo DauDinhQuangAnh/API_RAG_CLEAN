@@ -4,7 +4,9 @@ import io
 import hashlib
 import os
 import re
+import unicodedata
 import uuid
+from difflib import SequenceMatcher
 from typing import Any
 
 import pandas as pd
@@ -40,6 +42,7 @@ from API_RAG_NEW.document_structure import (
     BLOCK_UNKNOWN,
     LogicalBlock,
     build_logical_blocks,
+    clean_table_title,
     stable_parent_id,
     table_contexts_from_text,
     table_to_logical_blocks,
@@ -199,7 +202,7 @@ def ingest_file_content(
     chunk_stats = _new_chunk_stats(effective_profile)
 
     try:
-        source_count, records = _build_ingest_records(
+        source_count, records, build_stats = _build_ingest_records(
             extension,
             raw_content,
             file_name,
@@ -208,6 +211,7 @@ def ingest_file_content(
             chunker,
             requested_profile,
         )
+        _merge_chunk_stats(chunk_stats, build_stats)
         if requested_profile == "hybrid" and extension not in {".csv", ".xlsx"}:
             records = list(records)
     except Exception as exc:
@@ -220,7 +224,7 @@ def ingest_file_content(
         warnings.append(warning)
         effective_profile = "semantic"
         chunk_stats = _new_chunk_stats(effective_profile)
-        source_count, records = _build_ingest_records(
+        source_count, records, build_stats = _build_ingest_records(
             extension,
             raw_content,
             file_name,
@@ -229,6 +233,7 @@ def ingest_file_content(
             chunker,
             effective_profile,
         )
+        _merge_chunk_stats(chunk_stats, build_stats)
 
     for record in records:
         _update_chunk_stats(chunk_stats, record)
@@ -269,7 +274,7 @@ def _build_ingest_records(
     index_column: str | None,
     chunker: ProtonxSemanticChunker,
     chunking_profile: str,
-) -> tuple[int, Any]:
+) -> tuple[int, Any, dict[str, Any]]:
     if extension in {".csv", ".xlsx"}:
         if not index_column:
             raise HTTPException(
@@ -287,25 +292,33 @@ def _build_ingest_records(
                 file_hash,
                 chunker,
             ),
+            {},
         )
 
     if extension == ".pdf":
         if chunking_profile == "hybrid":
             pages_with_tables = _extract_pdf_pages_with_tables(raw_content)
-            return (
-                1,
+            cleanup_stats = {"skipped_flattened_table_chunks": 0}
+            records = list(
                 _iter_hybrid_pdf_chunk_records(
                     pages_with_tables,
                     file_name,
                     extension,
                     file_hash,
                     chunker,
-                ),
+                    cleanup_stats=cleanup_stats,
+                )
+            )
+            return (
+                1,
+                records,
+                cleanup_stats,
             )
         pages = _extract_pdf_pages(raw_content)
         return (
             1,
             _iter_pdf_chunk_records(pages, file_name, extension, file_hash, chunker),
+            {},
         )
 
     text = _extract_non_pdf_document_text(file_name, raw_content, extension)
@@ -319,6 +332,7 @@ def _build_ingest_records(
                 file_hash,
                 chunker,
             ),
+            {},
         )
     return (
         1,
@@ -329,6 +343,7 @@ def _build_ingest_records(
             file_hash,
             chunker,
         ),
+        {},
     )
 
 
@@ -342,9 +357,18 @@ def _new_chunk_stats(profile: str) -> dict[str, Any]:
         "large_chunks": 0,
         "pages": 0,
         "profile": profile,
+        "skipped_flattened_table_chunks": 0,
         "_total_chars": 0,
         "_pages": set(),
     }
+
+
+def _merge_chunk_stats(stats: dict[str, Any], extra_stats: dict[str, Any]) -> None:
+    for key, value in (extra_stats or {}).items():
+        if isinstance(value, int):
+            stats[key] = int(stats.get(key, 0)) + value
+        elif value is not None:
+            stats[key] = value
 
 
 def _update_chunk_stats(stats: dict[str, Any], record: dict[str, Any]) -> None:
@@ -755,6 +779,7 @@ def _iter_hybrid_pdf_chunk_records(
     extension: str,
     file_hash: str,
     chunker: ProtonxSemanticChunker,
+    cleanup_stats: dict[str, Any] | None = None,
 ):
     doc_id = _document_id(file_hash)
     source_type = extension.lstrip(".")
@@ -766,39 +791,15 @@ def _iter_hybrid_pdf_chunk_records(
         tables = page.get("tables") or []
         page_chunk_index = 0
 
-        for base_record in _build_hybrid_text_chunk_records(
-            page_text,
-            file_name,
-            source_type,
-            doc_id,
-            chunker,
-            page_number=page_number,
-            include_table_captions=not bool(tables),
-        ):
-            chunk = base_record["chunk"]
-            chunk_index += 1
-            page_chunk_index += 1
-            yield {
-                **base_record,
-                "id": stable_record_id(
-                    doc_id,
-                    file_name,
-                    source_type,
-                    page_number,
-                    base_record.get("section_path") or "",
-                    page_chunk_index,
-                    chunk,
-                ),
-                "chunk_index": chunk_index,
-                "page_chunk_index": page_chunk_index,
-            }
-
         contexts = table_contexts_from_text(page_text, page_number=page_number)
+        table_base_records: list[dict[str, Any]] = []
         next_block_index = _next_table_block_index(contexts)
         for fallback_table_index, table in enumerate(tables, start=1):
             table_index = int(table.get("table_index") or fallback_table_index)
             context = _table_context_for_index(contexts, table_index)
-            table_title = (context.table_title if context else None) or "N/A"
+            table_title = clean_table_title(
+                context.table_title if context else None
+            ) or "N/A"
             table_blocks = table_to_logical_blocks(
                 table.get("rows") or [],
                 table_index=table_index,
@@ -818,9 +819,7 @@ def _iter_hybrid_pdf_chunk_records(
                     0 if block.section_path else block.block_index,
                     block.section_path or block.table_title or block.text,
                 )
-                chunk_index += 1
-                page_chunk_index += 1
-                yield {
+                record = {
                     "id": stable_record_id(
                         doc_id,
                         file_name,
@@ -828,24 +827,72 @@ def _iter_hybrid_pdf_chunk_records(
                         page_number,
                         block.table_index,
                         block.table_row_index,
+                        block.table_row_part_index or "",
                         block.text,
                     ),
                     "chunk": block.text,
                     "doc_id": doc_id,
                     "source": file_name,
                     "source_type": source_type,
-                    "chunk_index": chunk_index,
                     "page_number": page_number,
-                    "page_chunk_index": page_chunk_index,
                     "chunk_type": "table_row",
                     "section_title": block.section_title,
                     "section_path": block.section_path,
                     "block_index": block.block_index,
                     "parent_id": parent_id,
                     "table_index": block.table_index,
-                    "table_title": table_title,
+                    "table_title": block.table_title or table_title,
                     "table_row_index": block.table_row_index,
                 }
+                if block.table_row_part_index is not None:
+                    record["table_row_part_index"] = block.table_row_part_index
+                table_base_records.append(record)
+
+        semantic_candidates = _build_hybrid_text_chunk_records(
+            page_text,
+            file_name,
+            source_type,
+            doc_id,
+            chunker,
+            page_number=page_number,
+            include_table_captions=not bool(tables),
+        )
+        semantic_records, skipped_count = _filter_flattened_table_semantic_records(
+            semantic_candidates,
+            table_base_records,
+        )
+        if cleanup_stats is not None:
+            cleanup_stats["skipped_flattened_table_chunks"] = int(
+                cleanup_stats.get("skipped_flattened_table_chunks", 0)
+            ) + skipped_count
+
+        for base_record in semantic_records:
+            chunk = base_record["chunk"]
+            chunk_index += 1
+            page_chunk_index += 1
+            yield {
+                **base_record,
+                "id": stable_record_id(
+                    doc_id,
+                    file_name,
+                    source_type,
+                    page_number,
+                    base_record.get("section_path") or "",
+                    page_chunk_index,
+                    chunk,
+                ),
+                "chunk_index": chunk_index,
+                "page_chunk_index": page_chunk_index,
+            }
+
+        for base_record in table_base_records:
+            chunk_index += 1
+            page_chunk_index += 1
+            yield {
+                **base_record,
+                "chunk_index": chunk_index,
+                "page_chunk_index": page_chunk_index,
+            }
 
 
 def _build_hybrid_text_chunk_records(
@@ -917,6 +964,109 @@ def _build_hybrid_text_chunk_records(
             record["page_number"] = page_number
         records.append(record)
     return records
+
+
+def _filter_flattened_table_semantic_records(
+    semantic_records: list[dict[str, Any]],
+    table_records: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    if not semantic_records or not table_records:
+        return semantic_records, 0
+
+    table_signatures = [
+        _table_signature(str(record.get("chunk") or ""))
+        for record in table_records
+    ]
+    table_signatures = [signature for signature in table_signatures if signature[1]]
+    if not table_signatures:
+        return semantic_records, 0
+
+    kept_records: list[dict[str, Any]] = []
+    skipped_count = 0
+    for record in semantic_records:
+        chunk = str(record.get("chunk") or "")
+        if _is_flattened_table_chunk(chunk, table_signatures):
+            skipped_count += 1
+            continue
+        kept_records.append(record)
+
+    return kept_records, skipped_count
+
+
+def _table_signature(text: str) -> tuple[str, set[str]]:
+    normalized = _normalize_for_table_overlap(text)
+    return normalized, _table_overlap_tokens(normalized)
+
+
+def _is_flattened_table_chunk(
+    chunk: str,
+    table_signatures: list[tuple[str, set[str]]],
+) -> bool:
+    candidate_normalized, candidate_tokens = _table_signature(chunk)
+    if len(candidate_tokens) < 8 or len(candidate_normalized) < 50:
+        return False
+
+    for table_normalized, table_tokens in table_signatures:
+        if len(table_tokens) < 8:
+            continue
+        shared_tokens = candidate_tokens & table_tokens
+        if len(shared_tokens) < 8:
+            continue
+
+        table_overlap = len(shared_tokens) / max(len(table_tokens), 1)
+        candidate_overlap = len(shared_tokens) / max(len(candidate_tokens), 1)
+        if (
+            table_normalized
+            and table_normalized in candidate_normalized
+            and table_overlap >= 0.7
+        ):
+            return True
+        if (
+            candidate_normalized in table_normalized
+            and len(candidate_normalized) >= 120
+            and candidate_overlap >= 0.7
+        ):
+            return True
+        if table_overlap >= 0.78 and candidate_overlap >= 0.58:
+            return True
+
+        ratio = SequenceMatcher(
+            None,
+            candidate_normalized[:4000],
+            table_normalized[:4000],
+        ).ratio()
+        if ratio >= 0.82 and table_overlap >= 0.62 and candidate_overlap >= 0.5:
+            return True
+
+    return False
+
+
+def _normalize_for_table_overlap(text: str) -> str:
+    normalized = unicodedata.normalize("NFKD", text or "")
+    without_marks = "".join(
+        char for char in normalized if not unicodedata.combining(char)
+    )
+    without_marks = without_marks.casefold()
+    without_marks = re.sub(r"[^a-z0-9]+", " ", without_marks)
+    return re.sub(r"\s+", " ", without_marks).strip()
+
+
+def _table_overlap_tokens(normalized_text: str) -> set[str]:
+    stop_tokens = {
+        "table",
+        "row",
+        "column",
+        "bang",
+        "hang",
+        "cot",
+        "n/a",
+        "na",
+    }
+    return {
+        token
+        for token in normalized_text.split()
+        if len(token) >= 3 and token not in stop_tokens
+    }
 
 
 def _group_text_blocks(

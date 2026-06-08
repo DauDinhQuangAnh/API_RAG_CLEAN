@@ -26,6 +26,11 @@ class LogicalBlock:
     table_index: int | None = None
     table_title: str | None = None
     table_row_index: int | None = None
+    table_row_part_index: int | None = None
+
+
+MAX_TABLE_TITLE_CHARS = 120
+MAX_TABLE_ROW_CHARS = 2000
 
 
 @dataclass(frozen=True)
@@ -62,8 +67,24 @@ def detect_table_caption(line: str) -> str | None:
 
     normalized = _strip_accents(text)
     if re.match(r"^(?:bang|table)\s+\d+[.:)]?\s+\S", normalized):
-        return text
+        return clean_table_title(text)
     return None
+
+
+def clean_table_title(title: str | None) -> str | None:
+    text = normalize_whitespace(title)
+    if not text:
+        return None
+
+    normalized = _strip_accents(text)
+    caption_match = re.match(r"^(?:bang|table)\s+\d+[.:)]?\s+\S.*", normalized)
+    if caption_match:
+        text = _trim_table_title_at_header_tokens(text)
+
+    if len(text) > MAX_TABLE_TITLE_CHARS:
+        text = _truncate_at_word_boundary(text, MAX_TABLE_TITLE_CHARS)
+
+    return text or None
 
 
 def is_bullet(line: str) -> bool:
@@ -201,7 +222,7 @@ def table_contexts_from_text(text: str, page_number: int | None = None) -> list[
     blocks = build_logical_blocks(text, page_number=page_number)
     contexts = [
         TableContext(
-            table_title=block.table_title or block.text,
+            table_title=clean_table_title(block.table_title or block.text),
             section_title=block.section_title,
             section_path=block.section_path,
             block_index=block.block_index,
@@ -242,6 +263,7 @@ def table_to_logical_blocks(
     section_path: str | None = None,
     start_block_index: int = 1,
 ) -> list[LogicalBlock]:
+    table_title = clean_table_title(table_title)
     rows = [_normalize_table_row(row) for row in table or []]
     rows = [row for row in rows if _is_meaningful_row(row)]
     if not rows:
@@ -268,22 +290,78 @@ def table_to_logical_blocks(
         )
         if not row_text:
             continue
-        blocks.append(
-            LogicalBlock(
-                text=row_text,
-                block_type=BLOCK_TABLE_ROW,
-                section_title=section_title,
-                section_path=section_path,
-                page_number=page_number,
-                block_index=block_index,
-                table_index=table_index,
-                table_title=table_title,
-                table_row_index=table_row_index,
-            )
+        row_parts = split_table_row_text(
+            row,
+            header=header,
+            row_index=table_row_index,
+            table_title=table_title,
         )
-        block_index += 1
+        for part_index, part_text in enumerate(row_parts, start=1):
+            blocks.append(
+                LogicalBlock(
+                    text=part_text,
+                    block_type=BLOCK_TABLE_ROW,
+                    section_title=section_title,
+                    section_path=section_path,
+                    page_number=page_number,
+                    block_index=block_index,
+                    table_index=table_index,
+                    table_title=table_title,
+                    table_row_index=table_row_index,
+                    table_row_part_index=part_index if len(row_parts) > 1 else None,
+                )
+            )
+            block_index += 1
 
     return blocks
+
+
+def split_table_row_text(
+    row: Sequence[str],
+    *,
+    header: Sequence[str] | None,
+    row_index: int,
+    table_title: str | None,
+    max_chars: int = MAX_TABLE_ROW_CHARS,
+) -> list[str]:
+    row_text = _format_table_row_text(
+        row,
+        header=header,
+        row_index=row_index,
+        table_title=table_title,
+    )
+    if len(row_text) <= max_chars:
+        return [row_text] if row_text else []
+
+    prefix = [f"Table: {table_title or 'N/A'}", f"Row: {row_index}"]
+    column_lines = [
+        f"{_header_label(header, index)}: {cell}"
+        for index, cell in enumerate(row)
+        if cell
+    ]
+    parts: list[str] = []
+    current_lines = list(prefix)
+
+    for line in column_lines:
+        candidate = "\n".join([*current_lines, line])
+        if len(candidate) <= max_chars:
+            current_lines.append(line)
+            continue
+
+        if len(current_lines) > len(prefix):
+            parts.append("\n".join(current_lines))
+            current_lines = list(prefix)
+
+        if len("\n".join([*current_lines, line])) <= max_chars:
+            current_lines.append(line)
+        else:
+            parts.extend(_split_long_column_line(prefix, line, max_chars))
+            current_lines = list(prefix)
+
+    if len(current_lines) > len(prefix):
+        parts.append("\n".join(current_lines))
+
+    return parts or [row_text]
 
 
 def stable_parent_id(
@@ -323,6 +401,43 @@ def _strip_accents(text: str) -> str:
         char for char in normalized if not unicodedata.combining(char)
     )
     return without_marks.casefold()
+
+
+def _trim_table_title_at_header_tokens(text: str) -> str:
+    normalized = _strip_accents(text)
+    header_tokens = [
+        " cach lam hien tai",
+        " tieu chi",
+        " thanh phan",
+        " noi dung",
+        " customer jobs",
+        " pains",
+        " gains",
+        " criteria",
+        " current",
+        " column ",
+    ]
+    cut_index: int | None = None
+    for token in header_tokens:
+        token_index = normalized.find(token)
+        if token_index <= 0:
+            continue
+        if cut_index is None or token_index < cut_index:
+            cut_index = token_index
+
+    if cut_index is None:
+        return text
+    return text[:cut_index].strip(" .:-|")
+
+
+def _truncate_at_word_boundary(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    truncated = text[:max_chars].rstrip()
+    last_space = truncated.rfind(" ")
+    if last_space >= max_chars * 0.65:
+        truncated = truncated[:last_space]
+    return truncated.rstrip(" .:-|")
 
 
 def _effective_heading_level(
@@ -386,3 +501,22 @@ def _header_label(header: Sequence[str] | None, index: int) -> str:
     if header and index < len(header) and header[index]:
         return header[index]
     return f"Column {index + 1}"
+
+
+def _split_long_column_line(
+    prefix: Sequence[str],
+    line: str,
+    max_chars: int,
+) -> list[str]:
+    available = max(200, max_chars - len("\n".join(prefix)) - 1)
+    chunks: list[str] = []
+    current = ""
+    for word in line.split():
+        if current and len(current) + len(word) + 1 > available:
+            chunks.append("\n".join([*prefix, current]))
+            current = word
+        else:
+            current = f"{current} {word}".strip()
+    if current:
+        chunks.append("\n".join([*prefix, current]))
+    return chunks
