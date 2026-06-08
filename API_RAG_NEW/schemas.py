@@ -43,8 +43,22 @@ class QueryRequest(BaseModel):
     number_docs_retrieval: int = Field(default=3, ge=1, le=50)
 
 
+class Citation(BaseModel):
+    id: int
+    source: str | None = None
+    source_type: str | None = None
+    page_number: int | None = None
+    chunk_index: int | None = None
+    page_chunk_index: int | None = None
+    row_index: int | None = None
+    row_chunk_index: int | None = None
+    doc_id: str | None = None
+    snippet: str
+
+
 class QueryResponse(BaseModel):
     metadatas: list[Any]
     retrieved_data: str
     answer: str
     full_prompt: str
+    citations: list[Citation] = Field(default_factory=list)

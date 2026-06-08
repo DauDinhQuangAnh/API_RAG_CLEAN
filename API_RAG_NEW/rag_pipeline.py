@@ -152,6 +152,42 @@ def format_retrieved_data(
     return "\n".join(lines)
 
 
+def format_retrieved_data_with_markers(
+    metadatas: list[dict[str, Any]], columns_to_answer: Sequence[str]
+) -> str:
+    normalized_metadatas = _normalize_metadatas_for_display(metadatas)
+    selected_columns = _resolve_selected_columns(
+        normalized_metadatas,
+        columns_to_answer,
+    )
+
+    blocks: list[str] = []
+    for index, normalized_metadata in enumerate(normalized_metadatas, start=1):
+        header_parts = [
+            _location_part(normalized_metadata),
+            f"chunk_index={_display_value(normalized_metadata.get('chunk_index'))}",
+        ]
+        header = (
+            f"[{index}] "
+            f"source={_display_value(normalized_metadata.get('source'))}"
+        )
+        body_lines = [
+            f"chunk: {_display_value(normalized_metadata.get('chunk'))}",
+        ]
+        if columns_to_answer:
+            for column, normalized_column in selected_columns:
+                if normalized_column == "chunk":
+                    continue
+                body_lines.append(
+                    f"{column}: {_display_value(normalized_metadata.get(normalized_column))}"
+                )
+        blocks.append(
+            f"{header} | {' | '.join(header_parts)}\n" + "\n".join(body_lines)
+        )
+
+    return "\n\n".join(blocks)
+
+
 def vector_search(
     model: Any,
     query: str,
@@ -187,7 +223,69 @@ def vector_search(
         rerank_llm=rerank_llm,
     )
     final_metadatas = [chunk.metadata for chunk in ranked_chunks]
-    return [final_metadatas], format_retrieved_data(final_metadatas, columns_to_answer)
+    return [final_metadatas], format_retrieved_data_with_markers(
+        final_metadatas,
+        columns_to_answer,
+    )
+
+
+def _normalize_metadatas_for_display(
+    metadatas: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    normalized_metadatas: list[dict[str, Any]] = []
+    for metadata in metadatas:
+        normalized_metadata = {}
+        if isinstance(metadata, dict):
+            normalized_metadata = {
+                str(key).casefold(): value for key, value in metadata.items()
+            }
+        normalized_metadatas.append(normalized_metadata)
+    return normalized_metadatas
+
+
+def _resolve_selected_columns(
+    normalized_metadatas: list[dict[str, Any]],
+    columns_to_answer: Sequence[str],
+) -> list[tuple[str, str]]:
+    available_columns = {
+        column
+        for normalized_metadata in normalized_metadatas
+        for column in normalized_metadata
+    }
+    if not columns_to_answer:
+        return []
+
+    selected_columns = [
+        (str(column), str(column).casefold()) for column in columns_to_answer
+    ]
+    missing_columns = [
+        column
+        for column, normalized_column in selected_columns
+        if normalized_column not in available_columns
+    ]
+    if missing_columns:
+        missing_list = ", ".join(missing_columns)
+        raise ValueError(
+            f"Requested columns not found in collection metadata: {missing_list}"
+        )
+    return selected_columns
+
+
+def _location_part(normalized_metadata: dict[str, Any]) -> str:
+    row_index = normalized_metadata.get("row_index")
+    if row_index is not None:
+        return f"row={_display_value(row_index)}"
+
+    page_number = normalized_metadata.get("page_number")
+    if page_number is not None:
+        return f"page={_display_value(page_number)}"
+    return "page=N/A"
+
+
+def _display_value(value: Any) -> str:
+    if value is None:
+        return "N/A"
+    return str(value)
 
 
 def _chunks_from_query_results(search_results: dict[str, Any]) -> list[RetrievedChunk]:

@@ -15,6 +15,7 @@ import pdfplumber
 from chunking import ProtonxSemanticChunker
 from llms.onlinellms import OnlineLLMs
 
+from API_RAG_NEW.citations import build_citations_from_metadatas
 from API_RAG_NEW.config import (
     CHROMA_CLIENT,
     DEFAULT_COLLECTION_DESCRIPTION,
@@ -239,6 +240,8 @@ def query_collection(collection_name: str, req: QueryRequest) -> QueryResponse:
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    final_metadatas = metadatas[0] if metadatas else []
+    citations = build_citations_from_metadatas(final_metadatas)
     full_prompt = _build_query_prompt(req.query, retrieved_data)
     answer_llm = rerank_llm or _build_llm()
     answer = answer_llm.generate_content(full_prompt)
@@ -247,6 +250,7 @@ def query_collection(collection_name: str, req: QueryRequest) -> QueryResponse:
         retrieved_data=retrieved_data,
         answer=answer,
         full_prompt=full_prompt,
+        citations=citations,
     )
 
 
@@ -282,14 +286,20 @@ def _build_llm(api_key: str | None = None) -> OnlineLLMs:
 
 def _build_query_prompt(query: str, retrieved_data: str) -> str:
     return (
-        "You are Weavey, a RAG question-answering assistant for Vietnamese textile "
-        "and apparel teams.\n"
-        "Answer only from the reference data below. Do not add next steps, decisions, "
-        "legal content, financial content, or unsupported claims. If the reference "
-        "data does not contain enough information, say so briefly in Vietnamese.\n"
-        "Answer in Vietnamese and cite specific details from the reference data when "
-        "available.\n\n"
-        f"User question: {query}\n\n"
+        "Bạn là Weavey, trợ lý hỏi đáp RAG cho tài liệu doanh nghiệp dệt may "
+        "Việt Nam.\n"
+        "Chỉ được trả lời dựa trên Reference data bên dưới. Không được thêm "
+        "thông tin, quyết định, nội dung pháp lý, tài chính, hoặc nhận định "
+        "không có trong dữ liệu tham chiếu.\n"
+        "Mỗi block trong Reference data có marker dạng [1], [2], [3]. Khi sử "
+        "dụng thông tin từ block nào, hãy trích dẫn marker của block đó trong "
+        "câu trả lời, ví dụ [1] hoặc [1][2].\n"
+        "Không được tự tạo nguồn, số trang, hoặc citation không có trong "
+        "Reference data.\n"
+        "Nếu Reference data không đủ thông tin để trả lời, hãy nói ngắn gọn "
+        "bằng tiếng Việt rằng tài liệu chưa cung cấp đủ thông tin.\n"
+        "Trả lời bằng tiếng Việt, rõ ràng, có cấu trúc.\n\n"
+        f"User question:\n{query}\n\n"
         f"Reference data:\n{retrieved_data}"
     )
 

@@ -288,7 +288,13 @@ def test_query_response_keeps_existing_fields_and_uses_final_chunks(monkeypatch)
     response = services.query_collection("demo", QueryRequest(query="question"))
     payload = response_payload(response)
 
-    assert set(payload) == {"metadatas", "retrieved_data", "answer", "full_prompt"}
+    assert set(payload) == {
+        "metadatas",
+        "retrieved_data",
+        "answer",
+        "full_prompt",
+        "citations",
+    }
     assert len(response.metadatas[0]) == 2
     assert "chunk: chunk 1" in response.full_prompt
     assert "chunk: chunk 2" in response.full_prompt

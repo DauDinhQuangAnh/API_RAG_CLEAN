@@ -120,7 +120,7 @@ Response gom cac truong hien co va them `documents`:
 
 ## Query RAG - Phase 2 Retrieval
 
-`/query`, `QueryRequest`, va `QueryResponse` van tuong thich nguoc. API khong them field request/response moi trong Phase 2. Co the bo trong `columns_to_answer`; API se mac dinh dua `chunk`, `source`, `source_type`, `chunk_index` vao prompt neu co.
+`/query`, `QueryRequest`, va cac field cu cua `QueryResponse` van tuong thich nguoc. Co the bo trong `columns_to_answer`; API se mac dinh dua chunk duoc truy xuat kem marker citation vao prompt.
 
 Phase 2 retrieval hien dang dung:
 
@@ -141,8 +141,6 @@ RAG_INCLUDE_NEIGHBORS=true
 RAG_RERANKER_TYPE=llm
 ```
 
-Chua implement citations trong `/query`. Citations la Phase 3.
-
 ```bash
 curl -X POST http://127.0.0.1:8000/collections/rag_collection_demo/query ^
   -H "Content-Type: application/json" ^
@@ -157,6 +155,65 @@ curl -X POST http://127.0.0.1:8000/collections/rag_collection_demo/query ^
   -d "{\"query\": \"Tom tat tai lieu\", \"columns_to_answer\": [\"chunk\", \"source\"], \"number_docs_retrieval\": 3}"
 ```
 
+## Query RAG - Phase 3 Citations
+
+`/query` tra them field `citations`. Field nay duoc backend tao tu metadata cua cac chunk cuoi cung sau vector search, neighbor expansion, va reranking. LLM co the tra loi voi inline marker nhu `[1]`, `[2]`, nhung structured citations khong do LLM tao.
+
+Response van giu cac field cu:
+
+- `metadatas`
+- `retrieved_data`
+- `answer`
+- `full_prompt`
+- `citations`
+
+`retrieved_data` hien thi cac chunk theo block co marker:
+
+```text
+[1] source=document.pdf | page=2 | chunk_index=5
+chunk: Noi dung chunk...
+
+[2] source=data.xlsx | row=4 | chunk_index=12
+chunk: Noi dung chunk...
+```
+
+Moi citation gom:
+
+- `id`
+- `source`
+- `source_type`
+- `page_number`
+- `chunk_index`
+- `page_chunk_index`
+- `row_index`
+- `row_chunk_index`
+- `doc_id`
+- `snippet`
+
+`Citation.snippet` chi la preview ngan da normalize whitespace va cat ngan, khong phai full chunk. Full chunk van co trong `retrieved_data` va `metadatas`.
+
+Example response:
+
+```json
+{
+  "answer": "Penalty Engine xu ly du lieu thieu bang cach ap du lieu mac dinh [1].",
+  "citations": [
+    {
+      "id": 1,
+      "source": "document.pdf",
+      "source_type": "pdf",
+      "page_number": 2,
+      "chunk_index": 5,
+      "page_chunk_index": 1,
+      "row_index": null,
+      "row_chunk_index": null,
+      "doc_id": "doc_xxx",
+      "snippet": "Xu ly khuyet du lieu..."
+    }
+  ]
+}
+```
+
 ## Roadmap
 
-Phase 2 retrieval/reranking da duoc implement. Phase 3 citations dang duoc len ke hoach, chua duoc implement trong code hien tai.
+Phase 3 citations da duoc implement. Phase 4 local UI/API polish dang duoc len ke hoach, chua duoc implement trong code hien tai.
