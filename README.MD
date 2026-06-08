@@ -214,6 +214,50 @@ Example response:
 }
 ```
 
+## Phase 5 - Production-grade Hybrid Chunking
+
+Phase 5 cai thien chunking cho tai lieu co cau truc nhu report, proposal, contract, standard, tai lieu ky thuat, tai lieu tai chinh, va PDF co bang. Semantic chunker hien co van duoc giu lam fallback va co the bat lai lam hanh vi chinh.
+
+Mac dinh:
+
+```env
+RAG_CHUNKING_PROFILE=hybrid
+```
+
+Gia tri ho tro:
+
+- `hybrid`: tach text thanh logical blocks, detect heading/section/table caption/bullet, chunk semantic ben trong section, tao PDF table row chunks khi `pdfplumber` extract duoc bang, va them parent-child metadata.
+- `semantic`: dung duong ingest semantic cu gan nhu nguyen ban, khong them metadata hybrid nhu `chunk_type`, `section_path`, `table_row_index`, hay `parent_id`.
+
+Metadata cu van duoc giu:
+
+- `chunk`
+- `doc_id`
+- `source`
+- `source_type`
+- `chunk_index`
+- PDF van giu `page_number` va `page_chunk_index`.
+- CSV/XLSX van giu `row_index` va `row_chunk_index`.
+
+Hybrid co the them metadata moi khi co:
+
+- `chunk_type`: `section_child`, `table_row`, hoac `fallback_semantic`.
+- `section_title`
+- `section_path`
+- `block_index`
+- `parent_id`
+- `table_index`
+- `table_title`
+- `table_row_index`
+
+Stable IDs va Chroma `upsert` van duoc giu. Neu hybrid gap loi bat ngo, ingest fallback ve semantic va tra warning trong `IngestResponse.warnings`. Query, reranking, citations, `/ui`, va `/runtime-config` tiep tuc hoat dong voi API response cu.
+
+Muon quay ve hanh vi chunking cu:
+
+```env
+RAG_CHUNKING_PROFILE=semantic
+```
+
 ## Phase 4 - Local UI and API Polish
 
 Phase 4 them local UI va cac endpoint debug an toan de demo/dev tren may local. Phase nay khong them production auth, OAuth, JWT, database users, Docker, hay cloud deployment.
@@ -239,12 +283,13 @@ GEMINI_MODEL=gemini-2.5-flash
 CHROMA_DB_PATH=db
 RAG_INITIAL_TOP_K=20
 RAG_FINAL_TOP_N=6
+RAG_CHUNKING_PROFILE=hybrid
 RAG_INCLUDE_NEIGHBORS=true
 RAG_RERANKER_TYPE=llm
 RAG_CORS_ORIGINS=*
 ```
 
-`GET /runtime-config` tra ve config runtime khong chua secret, gom top-k retrieval, final top-n, neighbor expansion, reranker type, Gemini model, embedding model dang dung, Chroma path, va CORS origins. Endpoint nay khong tra `GEMINI_API_KEY`.
+`GET /runtime-config` tra ve config runtime khong chua secret, gom top-k retrieval, final top-n, chunking profile, neighbor expansion, reranker type, Gemini model, embedding model dang dung, Chroma path, va CORS origins. Endpoint nay khong tra `GEMINI_API_KEY`.
 
 ## Roadmap
 

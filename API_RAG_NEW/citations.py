@@ -29,6 +29,16 @@ def build_citations_from_metadatas(
                     normalized_metadata.get("row_chunk_index")
                 ),
                 doc_id=_optional_str(normalized_metadata.get("doc_id")),
+                section_title=_optional_str(
+                    normalized_metadata.get("section_title")
+                ),
+                section_path=_optional_str(normalized_metadata.get("section_path")),
+                chunk_type=_optional_str(normalized_metadata.get("chunk_type")),
+                table_index=_optional_int(normalized_metadata.get("table_index")),
+                table_title=_optional_str(normalized_metadata.get("table_title")),
+                table_row_index=_optional_int(
+                    normalized_metadata.get("table_row_index")
+                ),
                 snippet=_snippet(str(normalized_metadata.get("chunk") or "")),
             )
         )

@@ -154,6 +154,7 @@ def test_ingesting_same_txt_file_twice_does_not_duplicate_records(monkeypatch):
     monkeypatch.setattr(services, "CHROMA_CLIENT", fake_client)
     monkeypatch.setattr(services, "EMBEDDING_MODEL", FakeEmbeddingModel())
     monkeypatch.setattr(services, "ProtonxSemanticChunker", lambda model: IdentityChunker())
+    monkeypatch.setattr(services, "RAG_CHUNKING_PROFILE", "semantic")
 
     raw_content = b"repeatable ingest chunk"
 

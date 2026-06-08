@@ -167,6 +167,17 @@ def format_retrieved_data_with_markers(
             _location_part(normalized_metadata),
             f"chunk_index={_display_value(normalized_metadata.get('chunk_index'))}",
         ]
+        section = normalized_metadata.get("section_path") or normalized_metadata.get(
+            "section_title"
+        )
+        if section:
+            header_parts.append(f"section={_display_value(section)}")
+        chunk_type = normalized_metadata.get("chunk_type")
+        if chunk_type:
+            header_parts.append(f"chunk_type={_display_value(chunk_type)}")
+        table_row_index = normalized_metadata.get("table_row_index")
+        if table_row_index is not None:
+            header_parts.append(f"table_row={_display_value(table_row_index)}")
         header = (
             f"[{index}] "
             f"source={_display_value(normalized_metadata.get('source'))}"

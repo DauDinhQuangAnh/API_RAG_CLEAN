@@ -45,6 +45,12 @@ def get_bool_env(name: str, default: bool) -> bool:
     return default
 
 
+def get_choice_env(name: str, default: str, supported_values: set[str]) -> str:
+    raw_value = os.getenv(name, default)
+    normalized = str(raw_value).strip().casefold()
+    return normalized if normalized in supported_values else default
+
+
 ROOT_PATH = os.getenv("ROOT_PATH", "").strip()
 ALLOWED_ORIGINS = parse_cors_origins(os.getenv("RAG_CORS_ORIGINS"))
 CHROMA_DB_PATH = os.getenv("CHROMA_DB_PATH", "db")
@@ -53,6 +59,11 @@ RAG_INITIAL_TOP_K = get_int_env("RAG_INITIAL_TOP_K", 20)
 RAG_FINAL_TOP_N = get_int_env("RAG_FINAL_TOP_N", 6)
 RAG_INCLUDE_NEIGHBORS = get_bool_env("RAG_INCLUDE_NEIGHBORS", True)
 RAG_RERANKER_TYPE = os.getenv("RAG_RERANKER_TYPE", "llm")
+RAG_CHUNKING_PROFILE = get_choice_env(
+    "RAG_CHUNKING_PROFILE",
+    "hybrid",
+    {"semantic", "hybrid"},
+)
 
 CHROMA_CLIENT = chromadb.PersistentClient(CHROMA_DB_PATH)
 EMBEDDING_MODEL, ACTIVE_EMBEDDING_MODEL_NAME, _ = ensure_embedding_model(

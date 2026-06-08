@@ -9,6 +9,9 @@ class IngestResponse(BaseModel):
     collection_name: str
     rows: int
     chunks: int
+    warnings: list[str] = Field(default_factory=list)
+    chunking_profile: str | None = None
+    chunk_stats: dict[str, Any] = Field(default_factory=dict)
 
 
 class CollectionCreateRequest(BaseModel):
@@ -53,6 +56,12 @@ class Citation(BaseModel):
     row_index: int | None = None
     row_chunk_index: int | None = None
     doc_id: str | None = None
+    section_title: str | None = None
+    section_path: str | None = None
+    chunk_type: str | None = None
+    table_index: int | None = None
+    table_title: str | None = None
+    table_row_index: int | None = None
     snippet: str
 
 

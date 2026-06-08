@@ -1094,6 +1094,7 @@
     function renderRecordsModal(payload) {
       const metadatas = Array.isArray(payload.metadatas) ? payload.metadatas : [];
       const ids = Array.isArray(payload.ids) ? payload.ids : [];
+      const documents = Array.isArray(payload.documents) ? payload.documents : [];
       const total = payload.count ?? metadatas.length;
       elements.recordsModalTitle.textContent = `Chunks - ${payload.collection_name || selectedCollection()}`;
       elements.recordsModalMeta.textContent = `Dang hien thi ${metadatas.length}/${total} chunks`;
@@ -1136,8 +1137,11 @@
 
         const text = document.createElement("div");
         text.className = "chunk-text";
+        const documentChunk = documents[index];
         text.textContent = metadata && metadata.chunk
           ? metadata.chunk
+          : documentChunk
+          ? documentChunk
           : formatData(metadata);
 
         item.appendChild(title);
