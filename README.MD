@@ -118,9 +118,30 @@ Response gom cac truong hien co va them `documents`:
 - `metadatas`
 - `documents`
 
-## Query RAG
+## Query RAG - Phase 2 Retrieval
 
-`/query`, `QueryRequest`, `QueryResponse`, prompt, va behavior truy van khong doi trong Phase 1. Co the bo trong `columns_to_answer`; API se mac dinh dua `chunk`, `source`, `source_type`, `chunk_index` vao prompt neu co.
+`/query`, `QueryRequest`, va `QueryResponse` van tuong thich nguoc. API khong them field request/response moi trong Phase 2. Co the bo trong `columns_to_answer`; API se mac dinh dua `chunk`, `source`, `source_type`, `chunk_index` vao prompt neu co.
+
+Phase 2 retrieval hien dang dung:
+
+- Initial vector retrieval voi `RAG_INITIAL_TOP_K` de lay candidate set lon hon.
+- Optional neighbor chunk expansion voi `RAG_INCLUDE_NEIGHBORS`.
+- Gemini LLM reranking khi `RAG_RERANKER_TYPE=llm`.
+- Fallback ve vector order neu reranker loi, tra JSON sai format, ID khong hop le, hoac tra qua it chunk.
+- Final selected chunks dua vao prompt duoc dieu khien boi:
+  - `RAG_FINAL_TOP_N` neu request khong gui `number_docs_retrieval`.
+  - `number_docs_retrieval` neu request gui explicit field nay.
+
+Env mac dinh cho Phase 2:
+
+```env
+RAG_INITIAL_TOP_K=20
+RAG_FINAL_TOP_N=6
+RAG_INCLUDE_NEIGHBORS=true
+RAG_RERANKER_TYPE=llm
+```
+
+Chua implement citations trong `/query`. Citations la Phase 3.
 
 ```bash
 curl -X POST http://127.0.0.1:8000/collections/rag_collection_demo/query ^
@@ -138,4 +159,4 @@ curl -X POST http://127.0.0.1:8000/collections/rag_collection_demo/query ^
 
 ## Roadmap
 
-Phase 2 reranking va Phase 3 citations dang duoc len ke hoach, chua duoc implement trong code hien tai.
+Phase 2 retrieval/reranking da duoc implement. Phase 3 citations dang duoc len ke hoach, chua duoc implement trong code hien tai.

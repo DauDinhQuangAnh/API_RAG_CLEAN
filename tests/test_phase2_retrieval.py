@@ -3,7 +3,10 @@ from __future__ import annotations
 from typing import Any
 
 from API_RAG_NEW.rag_pipeline import vector_search
-from API_RAG_NEW.reranker import rerank_candidate_ids
+from API_RAG_NEW.reranker import (
+    MAX_RERANK_CANDIDATE_CHARS,
+    rerank_candidate_ids,
+)
 from API_RAG_NEW.schemas import QueryRequest
 
 
@@ -113,6 +116,23 @@ def test_vector_search_uses_expanded_top_k_and_documents():
     assert "chunk: chunk 1" in retrieved_data
 
 
+def test_safe_env_parsing_falls_back_for_invalid_values(monkeypatch):
+    from API_RAG_NEW.config import get_bool_env, get_int_env
+
+    monkeypatch.setenv("BAD_INT", "not-an-int")
+    monkeypatch.setenv("BAD_BOOL", "maybe")
+    monkeypatch.setenv("TRUE_BOOL", "yes")
+    monkeypatch.setenv("FALSE_BOOL", "off")
+
+    assert get_int_env("BAD_INT", 20) == 20
+    assert get_int_env("MISSING_INT", 6) == 6
+    assert get_bool_env("BAD_BOOL", True) is True
+    assert get_bool_env("BAD_BOOL", False) is False
+    assert get_bool_env("MISSING_BOOL", True) is True
+    assert get_bool_env("TRUE_BOOL", False) is True
+    assert get_bool_env("FALSE_BOOL", True) is False
+
+
 def test_final_count_uses_env_default_unless_request_explicit(monkeypatch):
     from API_RAG_NEW import services
 
@@ -204,6 +224,18 @@ def test_gemini_reranker_orders_candidate_ids_only_and_fills_missing():
     assert "Rank candidate IDs" in llm.prompts[0]
 
 
+def test_reranker_prompt_truncates_candidate_text_only():
+    long_text = "x" * (MAX_RERANK_CANDIDATE_CHARS + 200)
+    candidates = [
+        type("Candidate", (), {"id": "a", "document": long_text, "metadata": {}})(),
+    ]
+    llm = FakeLLM('{"ranked_ids": ["a"]}')
+
+    assert rerank_candidate_ids("question", candidates, 1, llm) == ["a"]
+    assert ("x" * MAX_RERANK_CANDIDATE_CHARS) in llm.prompts[0]
+    assert ("x" * (MAX_RERANK_CANDIDATE_CHARS + 1)) not in llm.prompts[0]
+
+
 def test_reranker_malformed_invalid_or_failing_output_falls_back():
     candidates = [
         type("Candidate", (), {"id": "a", "document": "alpha", "metadata": {}})(),
@@ -262,3 +294,39 @@ def test_query_response_keeps_existing_fields_and_uses_final_chunks(monkeypatch)
     assert "chunk: chunk 2" in response.full_prompt
     assert "chunk: chunk 3" not in response.full_prompt
     assert response.answer == "final answer"
+
+
+def test_reranker_truncation_does_not_truncate_final_answer_chunks(monkeypatch):
+    from API_RAG_NEW import services
+
+    long_text = "x" * (MAX_RERANK_CANDIDATE_CHARS + 200)
+    collection = FakeCollection(
+        [
+            {
+                "id": "a",
+                "document": long_text,
+                "metadata": {
+                    "doc_id": "doc_1",
+                    "source": "demo.txt",
+                    "source_type": "txt",
+                    "chunk_index": 1,
+                    "chunk": "stale chunk",
+                },
+            }
+        ]
+    )
+    rerank_and_answer_llm = FakeLLM('{"ranked_ids": ["a"]}')
+
+    monkeypatch.setattr(services, "_get_collection_or_404", lambda name: collection)
+    monkeypatch.setattr(services, "EMBEDDING_MODEL", FakeEmbeddingModel())
+    monkeypatch.setattr(services, "RAG_FINAL_TOP_N", 1)
+    monkeypatch.setattr(services, "RAG_INITIAL_TOP_K", 1)
+    monkeypatch.setattr(services, "RAG_INCLUDE_NEIGHBORS", False)
+    monkeypatch.setattr(services, "RAG_RERANKER_TYPE", "llm")
+    monkeypatch.setattr(services, "_build_llm", lambda: rerank_and_answer_llm)
+
+    response = services.query_collection("demo", QueryRequest(query="question"))
+
+    assert long_text in response.retrieved_data
+    assert long_text in response.full_prompt
+    assert long_text not in rerank_and_answer_llm.prompts[0]

@@ -5,6 +5,9 @@ import re
 from typing import Any, Protocol, Sequence
 
 
+MAX_RERANK_CANDIDATE_CHARS = 1500
+
+
 class RerankCandidate(Protocol):
     id: str
     document: str
@@ -60,7 +63,7 @@ def _build_rerank_prompt(
     payload = [
         {
             "id": candidate.id,
-            "text": candidate.document,
+            "text": _truncate_candidate_text(candidate.document),
             "metadata": _compact_metadata(candidate.metadata),
         }
         for candidate in candidates
@@ -86,6 +89,12 @@ def _compact_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         "row_chunk_index",
     )
     return {key: metadata[key] for key in keys if key in metadata}
+
+
+def _truncate_candidate_text(text: str) -> str:
+    if len(text) <= MAX_RERANK_CANDIDATE_CHARS:
+        return text
+    return text[:MAX_RERANK_CANDIDATE_CHARS]
 
 
 def _parse_ranked_ids(text: str) -> list[str]:

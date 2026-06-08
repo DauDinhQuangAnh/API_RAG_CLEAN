@@ -25,13 +25,33 @@ def parse_cors_origins(raw_value: str | None) -> list[str]:
     return origins or ["*"]
 
 
+def get_int_env(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def get_bool_env(name: str, default: bool) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+
+    normalized = raw_value.strip().casefold()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
 ROOT_PATH = os.getenv("ROOT_PATH", "").strip()
 ALLOWED_ORIGINS = parse_cors_origins(os.getenv("RAG_CORS_ORIGINS"))
 CHROMA_DB_PATH = os.getenv("CHROMA_DB_PATH", "db")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-RAG_INITIAL_TOP_K = int(os.getenv("RAG_INITIAL_TOP_K", "20"))
-RAG_FINAL_TOP_N = int(os.getenv("RAG_FINAL_TOP_N", "6"))
-RAG_INCLUDE_NEIGHBORS = os.getenv("RAG_INCLUDE_NEIGHBORS", "true").lower() == "true"
+RAG_INITIAL_TOP_K = get_int_env("RAG_INITIAL_TOP_K", 20)
+RAG_FINAL_TOP_N = get_int_env("RAG_FINAL_TOP_N", 6)
+RAG_INCLUDE_NEIGHBORS = get_bool_env("RAG_INCLUDE_NEIGHBORS", True)
 RAG_RERANKER_TYPE = os.getenv("RAG_RERANKER_TYPE", "llm")
 
 CHROMA_CLIENT = chromadb.PersistentClient(CHROMA_DB_PATH)
