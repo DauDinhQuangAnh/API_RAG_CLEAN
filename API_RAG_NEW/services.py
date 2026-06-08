@@ -80,7 +80,7 @@ def get_collection_records(
     payload = collection.get(
         limit=limit,
         offset=offset,
-        include=["metadatas"],
+        include=["metadatas", "documents"],
     )
     return CollectionRecordsResponse(
         collection_name=collection.name,
@@ -89,6 +89,7 @@ def get_collection_records(
         offset=offset,
         ids=payload.get("ids") or [],
         metadatas=payload.get("metadatas") or [],
+        documents=payload.get("documents") or [],
     )
 
 
@@ -180,7 +181,7 @@ def ingest_file_content(
         pages = _extract_pdf_pages(raw_content)
         records = _iter_pdf_chunk_records(pages, file_name, extension, file_hash, chunker)
     else:
-        text = _extract_document_text(file_name, raw_content, extension)
+        text = _extract_non_pdf_document_text(file_name, raw_content, extension)
         records = _iter_document_chunk_records(
             text,
             file_name,
@@ -326,10 +327,10 @@ def _read_tabular_file(
     return dataframe.copy()
 
 
-def _extract_document_text(file_name: str, raw_content: bytes, extension: str) -> str:
+def _extract_non_pdf_document_text(
+    file_name: str, raw_content: bytes, extension: str
+) -> str:
     try:
-        if extension == ".pdf":
-            return _extract_pdf_text(raw_content)
         if extension == ".docx":
             return _extract_docx_text(raw_content)
         if extension in {".txt", ".text"}:
@@ -343,10 +344,6 @@ def _extract_document_text(file_name: str, raw_content: bytes, extension: str) -
         ) from exc
 
     raise HTTPException(status_code=400, detail=f"Unsupported file type: {file_name}")
-
-
-def _extract_pdf_text(raw_content: bytes) -> str:
-    return "\n\n".join(text for _, text in _extract_pdf_pages(raw_content))
 
 
 def _extract_pdf_pages(raw_content: bytes) -> list[tuple[int, str]]:
@@ -516,7 +513,8 @@ def _iter_tabular_chunk_records(
         "page_chunk_index",
     }
     chunk_index = 0
-    for row_index, row in dataframe.reset_index(drop=True).iterrows():
+    for row_offset, row in dataframe.reset_index(drop=True).iterrows():
+        row_index = int(row_offset) + 1
         row_data = {
             key: _normalize_dataframe_value(value)
             for key, value in row.to_dict().items()
@@ -546,7 +544,7 @@ def _iter_tabular_chunk_records(
                 "source": file_name,
                 "source_type": source_type,
                 "chunk_index": chunk_index,
-                "row_index": int(row_index),
+                "row_index": row_index,
                 "row_chunk_index": row_chunk_index,
                 **{
                     key: value

@@ -8,7 +8,12 @@ python -m venv .venv
 pip install -r requirements.txt
 uvicorn API_RAG_NEW.main:app --host 0.0.0.0 --port 8000
 ```
+
+Hoac dung Python portable trong repo:
+
+```bash
 .\python\python.exe -m uvicorn API_RAG_NEW.main:app --host 0.0.0.0 --port 8000
+```
 
 Base URL mac dinh: `http://127.0.0.1:8000`
 
@@ -20,12 +25,33 @@ Base URL mac dinh: `http://127.0.0.1:8000`
 - `GET /collections/{collection_name}`: xem thong tin collection.
 - `PATCH /collections/{collection_name}`: sua ten hoac metadata collection.
 - `DELETE /collections/{collection_name}`: xoa collection.
+- `GET /collections/{collection_name}/records`: debug records, tra ve `ids`, `metadatas`, va `documents`.
 - `POST /ingest`: ingest file document hoac bang du lieu.
 - `POST /collections/{collection_name}/query`: hoi dap RAG tren collection.
 
-## Ingest document va bang du lieu
+## Ingest Phase 1
 
-Flow document dung file `.docx`, `.pdf`, `.txt`, `.text`. API se doc noi dung file va chunk truc tiep toan bo text.
+Phase 1 ho tro cac loai file:
+
+- PDF
+- DOCX
+- TXT/TEXT
+- CSV
+- XLSX
+
+Khi ingest, chunk text duoc luu vao Chroma `documents`. Metadata van giu truong `chunk` de tuong thich nguoc voi query/prompt hien tai. Ghi lai cung file vao cung collection dung stable record IDs va Chroma `upsert`, nen record cu duoc cap nhat thay vi tao ban sao trung lap.
+
+## Ingest PDF
+
+PDF duoc doc theo tung trang bang `_extract_pdf_pages()`, sau do chunk theo trang. Metadata cua moi chunk PDF gom:
+
+- `chunk`
+- `doc_id`
+- `source`
+- `source_type`
+- `chunk_index`: 1-based, tang toan cuc theo tat ca chunk cua file.
+- `page_number`: 1-based.
+- `page_chunk_index`: 1-based trong tung trang.
 
 ```bash
 curl -X POST http://127.0.0.1:8000/ingest ^
@@ -33,15 +59,25 @@ curl -X POST http://127.0.0.1:8000/ingest ^
   -F "collection_name=rag_collection_demo"
 ```
 
-Metadata cho document chunk:
+## Ingest DOCX/TXT
+
+DOCX, TXT, va TEXT duoc doc thanh text, sau do chunk truc tiep. Metadata cua moi chunk gom:
 
 - `chunk`
 - `doc_id`
 - `source`
 - `source_type`
-- `chunk_index`
+- `chunk_index`: 1-based theo file.
 
-Flow bang du lieu dung file `.csv` hoac `.xlsx`. Khi upload CSV/XLSX, bat buoc truyen `index_column` de chon cot chunking:
+```bash
+curl -X POST http://127.0.0.1:8000/ingest ^
+  -F "file=@document.txt" ^
+  -F "collection_name=rag_collection_demo"
+```
+
+## Ingest CSV/XLSX
+
+CSV/XLSX bat buoc truyen `index_column` de chon cot chunking. Moi row co text hop le trong `index_column` duoc chunk rieng.
 
 ```bash
 curl -X POST http://127.0.0.1:8000/ingest ^
@@ -57,11 +93,34 @@ curl -X POST http://127.0.0.1:8000/ingest ^
   -F "collection_name=rag_collection_demo"
 ```
 
-Voi CSV/XLSX, API se chunk noi dung trong `index_column` va van luu cac cot con lai cua tung row vao metadata.
+Metadata cua moi chunk CSV/XLSX gom:
+
+- `chunk`
+- `doc_id`: stable theo file hash va `row_index`.
+- `source`
+- `source_type`
+- `chunk_index`: 1-based, tang toan cuc theo tat ca chunk tabular.
+- `row_index`: 1-based theo thu tu row sau khi reset index.
+- `row_chunk_index`: 1-based trong tung row.
+- Cac field cua row sau khi sanitize, tru cac key noi bo nhu `id`, `_id`, `chunk`, `doc_id`, `source`, `source_type`, `chunk_index`, `row_index`, `row_chunk_index`, `page_number`, `page_chunk_index`.
+
+## Debug records
+
+Dung `/collections/{collection_name}/records` de xem metadata va document text da luu trong Chroma:
+
+```bash
+curl "http://127.0.0.1:8000/collections/rag_collection_demo/records?limit=10"
+```
+
+Response gom cac truong hien co va them `documents`:
+
+- `ids`
+- `metadatas`
+- `documents`
 
 ## Query RAG
 
-Co the bo trong `columns_to_answer`; API se mac dinh dua `chunk`, `source`, `source_type`, `chunk_index` vao prompt neu co.
+`/query`, `QueryRequest`, `QueryResponse`, prompt, va behavior truy van khong doi trong Phase 1. Co the bo trong `columns_to_answer`; API se mac dinh dua `chunk`, `source`, `source_type`, `chunk_index` vao prompt neu co.
 
 ```bash
 curl -X POST http://127.0.0.1:8000/collections/rag_collection_demo/query ^
@@ -76,3 +135,7 @@ curl -X POST http://127.0.0.1:8000/collections/rag_collection_demo/query ^
   -H "Content-Type: application/json" ^
   -d "{\"query\": \"Tom tat tai lieu\", \"columns_to_answer\": [\"chunk\", \"source\"], \"number_docs_retrieval\": 3}"
 ```
+
+## Roadmap
+
+Phase 2 reranking va Phase 3 citations dang duoc len ke hoach, chua duoc implement trong code hien tai.

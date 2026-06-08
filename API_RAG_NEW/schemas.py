@@ -34,6 +34,7 @@ class CollectionRecordsResponse(BaseModel):
     offset: int
     ids: list[str]
     metadatas: list[Any]
+    documents: list[str] = Field(default_factory=list)
 
 
 class QueryRequest(BaseModel):
