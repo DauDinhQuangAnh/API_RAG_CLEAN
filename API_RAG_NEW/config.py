@@ -29,6 +29,10 @@ ROOT_PATH = os.getenv("ROOT_PATH", "").strip()
 ALLOWED_ORIGINS = parse_cors_origins(os.getenv("RAG_CORS_ORIGINS"))
 CHROMA_DB_PATH = os.getenv("CHROMA_DB_PATH", "db")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+RAG_INITIAL_TOP_K = int(os.getenv("RAG_INITIAL_TOP_K", "20"))
+RAG_FINAL_TOP_N = int(os.getenv("RAG_FINAL_TOP_N", "6"))
+RAG_INCLUDE_NEIGHBORS = os.getenv("RAG_INCLUDE_NEIGHBORS", "true").lower() == "true"
+RAG_RERANKER_TYPE = os.getenv("RAG_RERANKER_TYPE", "llm")
 
 CHROMA_CLIENT = chromadb.PersistentClient(CHROMA_DB_PATH)
 EMBEDDING_MODEL, ACTIVE_EMBEDDING_MODEL_NAME, _ = ensure_embedding_model(

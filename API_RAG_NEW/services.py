@@ -22,6 +22,10 @@ from API_RAG_NEW.config import (
     GEMINI_MODEL,
     GEMINI_PROVIDER,
     INGEST_BATCH_SIZE,
+    RAG_FINAL_TOP_N,
+    RAG_INCLUDE_NEIGHBORS,
+    RAG_INITIAL_TOP_K,
+    RAG_RERANKER_TYPE,
     get_gemini_api_key,
 )
 from API_RAG_NEW.rag_pipeline import (
@@ -219,24 +223,49 @@ def ingest_file_content(
 
 def query_collection(collection_name: str, req: QueryRequest) -> QueryResponse:
     collection = _get_collection_or_404(collection_name)
+    final_n = _resolve_final_docs_retrieval(req)
+    rerank_llm = _build_optional_rerank_llm()
     try:
         metadatas, retrieved_data = vector_search(
             EMBEDDING_MODEL,
             req.query,
             collection,
             req.columns_to_answer,
-            req.number_docs_retrieval,
+            final_n,
+            initial_top_k=RAG_INITIAL_TOP_K,
+            include_neighbors=RAG_INCLUDE_NEIGHBORS,
+            reranker_type=RAG_RERANKER_TYPE,
+            rerank_llm=rerank_llm,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     full_prompt = _build_query_prompt(req.query, retrieved_data)
-    answer = _build_llm().generate_content(full_prompt)
+    answer_llm = rerank_llm or _build_llm()
+    answer = answer_llm.generate_content(full_prompt)
     return QueryResponse(
         metadatas=metadatas,
         retrieved_data=retrieved_data,
         answer=answer,
         full_prompt=full_prompt,
     )
+
+
+def _resolve_final_docs_retrieval(req: QueryRequest) -> int:
+    fields_set = getattr(req, "model_fields_set", None)
+    if fields_set is None:
+        fields_set = getattr(req, "__fields_set__", set())
+    if "number_docs_retrieval" in fields_set:
+        return req.number_docs_retrieval
+    return RAG_FINAL_TOP_N
+
+
+def _build_optional_rerank_llm() -> OnlineLLMs | None:
+    if RAG_RERANKER_TYPE.casefold() != "llm":
+        return None
+    try:
+        return _build_llm()
+    except Exception:
+        return None
 
 
 def _build_llm(api_key: str | None = None) -> OnlineLLMs:
