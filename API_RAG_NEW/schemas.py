@@ -27,9 +27,18 @@ class CollectionInfo(BaseModel):
     count: int
 
 
+class CollectionRecordsResponse(BaseModel):
+    collection_name: str
+    count: int
+    limit: int
+    offset: int
+    ids: list[str]
+    metadatas: list[Any]
+
+
 class QueryRequest(BaseModel):
     query: str
-    columns_to_answer: list[str]
+    columns_to_answer: list[str] = Field(default_factory=list)
     number_docs_retrieval: int = Field(default=3, ge=1, le=50)
 
 

@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import io
 import os
+import re
 import uuid
 from typing import Any
 
 import pandas as pd
 from fastapi import HTTPException
+from docx import Document
+import pdfplumber
 
 from chunking import ProtonxSemanticChunker
 from llms.onlinellms import OnlineLLMs
@@ -28,6 +31,7 @@ from API_RAG_NEW.rag_pipeline import (
 from API_RAG_NEW.schemas import (
     CollectionCreateRequest,
     CollectionInfo,
+    CollectionRecordsResponse,
     CollectionUpdateRequest,
     IngestResponse,
     QueryRequest,
@@ -65,6 +69,27 @@ def get_collection_info(collection_name: str) -> CollectionInfo:
     return _to_collection_info(_get_collection_or_404(collection_name))
 
 
+def get_collection_records(
+    collection_name: str,
+    limit: int,
+    offset: int,
+) -> CollectionRecordsResponse:
+    collection = _get_collection_or_404(collection_name)
+    payload = collection.get(
+        limit=limit,
+        offset=offset,
+        include=["metadatas"],
+    )
+    return CollectionRecordsResponse(
+        collection_name=collection.name,
+        count=collection.count(),
+        limit=limit,
+        offset=offset,
+        ids=payload.get("ids") or [],
+        metadatas=payload.get("metadatas") or [],
+    )
+
+
 def update_collection(
     collection_name: str, req: CollectionUpdateRequest
 ) -> CollectionInfo:
@@ -100,22 +125,26 @@ def ingest_csv_content(
     index_column: str,
     requested_collection_name: str | None,
 ) -> IngestResponse:
-    if not file_name.lower().endswith(".csv"):
-        raise HTTPException(status_code=400, detail="Only CSV files are supported.")
+    return ingest_file_content(
+        file_name,
+        raw_content,
+        requested_collection_name,
+        index_column=index_column,
+    )
 
-    try:
-        dataframe = pd.read_csv(io.BytesIO(raw_content))
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Failed to read CSV: {exc}") from exc
 
-    if index_column not in dataframe.columns:
+def ingest_file_content(
+    file_name: str,
+    raw_content: bytes,
+    requested_collection_name: str | None,
+    index_column: str | None = None,
+) -> IngestResponse:
+    extension = os.path.splitext(file_name)[1].casefold()
+    if extension not in {".csv", ".xlsx", ".docx", ".pdf", ".txt", ".text"}:
         raise HTTPException(
             status_code=400,
-            detail=f"Column '{index_column}' not found.",
+            detail="Only DOCX, PDF, TXT, TEXT, CSV, and XLSX files are supported.",
         )
-
-    dataframe = dataframe.copy()
-    dataframe["doc_id"] = [str(uuid.uuid4()) for _ in range(len(dataframe))]
 
     final_collection_name = _resolve_collection_name(file_name, requested_collection_name)
     collection = CHROMA_CLIENT.get_or_create_collection(
@@ -127,7 +156,21 @@ def ingest_csv_content(
     pending_records: list[dict[str, Any]] = []
     chunk_count = 0
 
-    for record in _iter_chunk_records(dataframe, index_column, chunker):
+    source_count = 1
+    if extension in {".csv", ".xlsx"}:
+        if not index_column:
+            raise HTTPException(
+                status_code=400,
+                detail="index_column is required for CSV/XLSX ingest.",
+            )
+        dataframe = _read_tabular_file(raw_content, extension, index_column)
+        source_count = len(dataframe)
+        records = _iter_tabular_chunk_records(dataframe, index_column, chunker)
+    else:
+        text = _extract_document_text(file_name, raw_content, extension)
+        records = _iter_document_chunk_records(text, file_name, extension, chunker)
+
+    for record in records:
         pending_records.append(record)
         if len(pending_records) >= INGEST_BATCH_SIZE:
             chunk_count += add_records_to_collection(
@@ -149,20 +192,23 @@ def ingest_csv_content(
 
     return IngestResponse(
         collection_name=final_collection_name,
-        rows=len(dataframe),
+        rows=source_count,
         chunks=chunk_count,
     )
 
 
 def query_collection(collection_name: str, req: QueryRequest) -> QueryResponse:
     collection = _get_collection_or_404(collection_name)
-    metadatas, retrieved_data = vector_search(
-        EMBEDDING_MODEL,
-        req.query,
-        collection,
-        req.columns_to_answer,
-        req.number_docs_retrieval,
-    )
+    try:
+        metadatas, retrieved_data = vector_search(
+            EMBEDDING_MODEL,
+            req.query,
+            collection,
+            req.columns_to_answer,
+            req.number_docs_retrieval,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     full_prompt = _build_query_prompt(req.query, retrieved_data)
     answer = _build_llm().generate_content(full_prompt)
     return QueryResponse(
@@ -227,7 +273,160 @@ def _resolve_collection_name(
     return f"rag_collection_{base_name}_{uuid.uuid4().hex[:6]}"
 
 
-def _iter_chunk_records(
+def _read_tabular_file(
+    raw_content: bytes,
+    extension: str,
+    index_column: str,
+) -> pd.DataFrame:
+    file_type = extension.lstrip(".").upper()
+    try:
+        if extension == ".csv":
+            dataframe = pd.read_csv(io.BytesIO(raw_content))
+        else:
+            dataframe = pd.read_excel(io.BytesIO(raw_content))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to read {file_type}: {exc}",
+        ) from exc
+
+    if index_column not in dataframe.columns:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Column '{index_column}' not found in {file_type} file.",
+        )
+
+    dataframe = dataframe.copy()
+    dataframe["doc_id"] = [str(uuid.uuid4()) for _ in range(len(dataframe))]
+    return dataframe
+
+
+def _extract_document_text(file_name: str, raw_content: bytes, extension: str) -> str:
+    try:
+        if extension == ".pdf":
+            return _extract_pdf_text(raw_content)
+        if extension == ".docx":
+            return _extract_docx_text(raw_content)
+        if extension in {".txt", ".text"}:
+            return _decode_text_file(raw_content)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to read {extension.lstrip('.').upper()} file: {exc}",
+        ) from exc
+
+    raise HTTPException(status_code=400, detail=f"Unsupported file type: {file_name}")
+
+
+def _extract_pdf_text(raw_content: bytes) -> str:
+    pages: list[str] = []
+    with pdfplumber.open(io.BytesIO(raw_content)) as pdf:
+        for page in pdf.pages:
+            page_text = page.extract_text(x_tolerance=1, y_tolerance=3) or ""
+            page_text = _clean_pdf_page_text(page_text)
+            if page_text:
+                pages.append(page_text)
+
+    return "\n\n".join(pages)
+
+
+def _clean_pdf_page_text(text: str) -> str:
+    lines: list[str] = []
+
+    for raw_line in text.splitlines():
+        line = re.sub(r"[ \t]+", " ", raw_line).strip()
+        if not line:
+            continue
+        if re.fullmatch(r"Trang\s+\d+\s*/\s*\d+", line, flags=re.IGNORECASE):
+            continue
+        if re.fullmatch(r"[•●○▪\-–—]+", line):
+            continue
+        lines.append(line)
+
+    paragraphs: list[str] = []
+    current = ""
+    for line in lines:
+        if not current:
+            current = line
+            continue
+
+        if _should_join_pdf_line(current, line):
+            current = f"{current} {line}"
+        else:
+            paragraphs.append(current)
+            current = line
+
+    if current:
+        paragraphs.append(current)
+
+    cleaned = "\n".join(paragraphs)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
+def _should_join_pdf_line(previous: str, current: str) -> bool:
+    if re.fullmatch(r"\d+\.", previous):
+        return True
+    if previous.endswith(("/", "-", "–", "—")):
+        return True
+    if re.search(r"[.!?;:]$", previous):
+        return False
+    if re.match(r"^\d+\.|^[a-zA-Z]\)", current):
+        return False
+    return True
+
+
+def _extract_docx_text(raw_content: bytes) -> str:
+    document = Document(io.BytesIO(raw_content))
+    blocks: list[str] = []
+
+    blocks.extend(paragraph.text.strip() for paragraph in document.paragraphs)
+    for table in document.tables:
+        for row in table.rows:
+            cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+            if cells:
+                blocks.append(" | ".join(cells))
+
+    return "\n\n".join(block for block in blocks if block)
+
+
+def _decode_text_file(raw_content: bytes) -> str:
+    for encoding in ("utf-8-sig", "utf-16", "cp1258", "latin-1"):
+        try:
+            return raw_content.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+
+    raise HTTPException(status_code=400, detail="Failed to decode text file.")
+
+
+def _iter_document_chunk_records(
+    text: str,
+    file_name: str,
+    extension: str,
+    chunker: ProtonxSemanticChunker,
+):
+    if not text.strip():
+        return
+
+    doc_id = str(uuid.uuid4())
+    source_type = extension.lstrip(".")
+    for chunk_index, chunk in enumerate(chunker.split_text(text), start=1):
+        if not chunk.strip():
+            continue
+        yield {
+            "chunk": chunk,
+            "doc_id": doc_id,
+            "source": file_name,
+            "source_type": source_type,
+            "chunk_index": chunk_index,
+        }
+
+
+def _iter_tabular_chunk_records(
     dataframe: pd.DataFrame,
     index_column: str,
     chunker: ProtonxSemanticChunker,

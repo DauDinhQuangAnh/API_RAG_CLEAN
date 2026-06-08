@@ -10,6 +10,7 @@
       --bg: #f6f7f9;
       --panel: #ffffff;
       --panel-soft: #f1f5f4;
+      --panel-strong: #e7eeeb;
       --text: #18201f;
       --muted: #65706d;
       --border: #d8dfdd;
@@ -17,6 +18,9 @@
       --primary-dark: #0f5f4a;
       --accent: #ad6b16;
       --danger: #b83932;
+      --danger-dark: #8f2b27;
+      --code-bg: #101817;
+      --code-text: #e5f0ed;
       --shadow: 0 12px 28px rgba(22, 32, 30, 0.08);
     }
 
@@ -35,17 +39,17 @@
     }
 
     .shell {
-      width: min(1180px, calc(100% - 32px));
+      width: min(1280px, calc(100% - 32px));
       margin: 0 auto;
-      padding: 24px 0 40px;
+      padding: 20px 0 36px;
     }
 
     header {
-      display: flex;
-      align-items: flex-end;
-      justify-content: space-between;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
       gap: 16px;
-      margin-bottom: 18px;
+      align-items: end;
+      margin-bottom: 16px;
     }
 
     h1 {
@@ -55,8 +59,20 @@
       letter-spacing: 0;
     }
 
+    h2 {
+      margin: 0;
+      font-size: 17px;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    .subtle {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
     .status {
-      min-width: 190px;
+      min-width: 220px;
       padding: 10px 12px;
       border: 1px solid var(--border);
       background: var(--panel);
@@ -67,7 +83,7 @@
 
     .grid {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
+      grid-template-columns: minmax(0, 1.15fr) minmax(360px, 0.85fr);
       gap: 16px;
       align-items: start;
     }
@@ -85,11 +101,12 @@
       padding: 16px;
     }
 
-    h2 {
-      margin: 0 0 14px;
-      font-size: 17px;
-      font-weight: 700;
-      letter-spacing: 0;
+    .section-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
     }
 
     label {
@@ -115,7 +132,7 @@
     }
 
     textarea {
-      min-height: 100px;
+      min-height: 120px;
       resize: vertical;
     }
 
@@ -130,6 +147,20 @@
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 12px;
+    }
+
+    .row.three {
+      grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr) minmax(0, 0.65fr);
+    }
+
+    .inline {
+      display: flex;
+      gap: 8px;
+      align-items: end;
+    }
+
+    .inline > label {
+      flex: 1;
     }
 
     .actions {
@@ -149,6 +180,7 @@
       font: inherit;
       font-weight: 700;
       padding: 8px 12px;
+      white-space: nowrap;
     }
 
     button:hover {
@@ -162,7 +194,7 @@
     }
 
     button.secondary:hover {
-      background: #e6eeeb;
+      background: var(--panel-strong);
     }
 
     button.danger {
@@ -170,24 +202,148 @@
     }
 
     button.danger:hover {
-      background: #8f2b27;
+      background: var(--danger-dark);
+    }
+
+    button.ghost {
+      background: transparent;
+      border-color: var(--border);
+      color: var(--text);
+    }
+
+    button.ghost:hover {
+      background: var(--panel-soft);
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.58;
+    }
+
+    .busy-label {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .busy-label.active {
+      display: flex;
+    }
+
+    .spinner {
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(23, 125, 99, 0.22);
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      flex: 0 0 auto;
+    }
+
+    .progress {
+      display: none;
+      height: 6px;
+      margin-top: 10px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: var(--panel-strong);
+    }
+
+    .progress.active {
+      display: block;
+    }
+
+    .progress.indeterminate::before {
+      content: "";
+      display: block;
+      width: 42%;
+      height: 100%;
+      border-radius: inherit;
+      background: var(--primary);
+      animation: progress-slide 1.15s ease-in-out infinite;
+    }
+
+    .progress-fill {
+      display: block;
+      width: 0%;
+      height: 100%;
+      border-radius: inherit;
+      background: var(--primary);
+      transition: width 0.18s ease;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    @keyframes progress-slide {
+      0% {
+        transform: translateX(-110%);
+      }
+
+      100% {
+        transform: translateX(250%);
+      }
+    }
+
+    .quick-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .metric {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel-soft);
+      padding: 10px;
+      min-height: 64px;
+    }
+
+    .metric span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .metric strong {
+      display: block;
+      margin-top: 4px;
+      overflow-wrap: anywhere;
+      font-size: 16px;
     }
 
     .collection-list {
       display: grid;
       gap: 8px;
       margin-top: 12px;
+      max-height: 260px;
+      overflow: auto;
+      padding-right: 2px;
     }
 
     .collection-item {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
       gap: 10px;
+      align-items: center;
       padding: 10px 12px;
       border: 1px solid var(--border);
       border-radius: 6px;
       background: var(--panel-soft);
+    }
+
+    .collection-item.active {
+      border-color: rgba(23, 125, 99, 0.55);
+      background: #e7f3ef;
     }
 
     .collection-name {
@@ -195,50 +351,144 @@
       font-weight: 700;
     }
 
+    .mini-actions {
+      display: flex;
+      gap: 6px;
+    }
+
+    .mini-actions button {
+      min-height: 32px;
+      padding: 6px 9px;
+      font-size: 13px;
+    }
+
+    .output-wrap {
+      position: sticky;
+      top: 12px;
+    }
+
     .output {
-      min-height: 260px;
-      max-height: 620px;
+      min-height: 420px;
+      max-height: calc(100vh - 238px);
       overflow: auto;
       white-space: pre-wrap;
       overflow-wrap: anywhere;
       border: 1px solid var(--border);
       border-radius: 8px;
-      background: #101817;
-      color: #e5f0ed;
+      background: var(--code-bg);
+      color: var(--code-text);
       padding: 14px;
       font-family: Consolas, "Courier New", monospace;
       font-size: 13px;
     }
 
-    .hint {
+    .mode-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .mode-bar button.active {
+      background: var(--primary);
+      color: #fff;
+      border-color: transparent;
+    }
+
+    .compact {
+      margin-top: 10px;
+    }
+
+    .modal-backdrop {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 50;
+      align-items: center;
+      justify-content: center;
+      background: rgba(16, 24, 23, 0.48);
+      padding: 18px;
+    }
+
+    .modal-backdrop.active {
+      display: flex;
+    }
+
+    .modal {
+      width: min(1040px, 100%);
+      max-height: min(760px, calc(100vh - 36px));
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      box-shadow: 0 24px 80px rgba(16, 24, 23, 0.24);
+      padding: 16px;
+    }
+
+    .modal-meta {
       color: var(--muted);
       font-size: 13px;
-      margin-top: 8px;
+      font-weight: 700;
+      margin-bottom: 10px;
     }
 
-    .inline {
+    .chunk-list {
+      display: grid;
+      gap: 10px;
+      overflow: auto;
+      padding-right: 4px;
+    }
+
+    .chunk-item {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel-soft);
+      padding: 12px;
+    }
+
+    .chunk-title {
       display: flex;
-      gap: 8px;
-      align-items: end;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 8px;
+      font-weight: 700;
     }
 
-    .inline > label {
-      flex: 1;
+    .chunk-meta {
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 8px;
+      overflow-wrap: anywhere;
     }
 
-    @media (max-width: 900px) {
+    .chunk-text {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    @media (max-width: 980px) {
+      header,
       .grid,
-      .row {
+      .row,
+      .row.three {
         grid-template-columns: 1fr;
-      }
-
-      header {
-        align-items: stretch;
-        flex-direction: column;
       }
 
       .status {
         text-align: left;
+      }
+
+      .output-wrap {
+        position: static;
+      }
+
+      .output {
+        max-height: 620px;
+      }
+
+      .quick-grid {
+        grid-template-columns: 1fr;
       }
     }
   </style>
@@ -248,7 +498,7 @@
     <header>
       <div>
         <h1>RAG API Test UI</h1>
-        <div class="hint">Test API local qua FastAPI server.</div>
+        <div class="subtle">FastAPI local test console</div>
       </div>
       <div id="status" class="status">Chua ket noi</div>
     </header>
@@ -256,7 +506,10 @@
     <div class="grid">
       <div class="stack">
         <section>
-          <h2>Ket noi</h2>
+          <div class="section-head">
+            <h2>Ket noi</h2>
+            <button id="docsBtn" type="button" class="ghost">Mo /docs</button>
+          </div>
           <div class="inline">
             <label>
               Base URL
@@ -264,79 +517,131 @@
             </label>
             <button id="healthBtn" type="button">Health</button>
           </div>
+          <div class="quick-grid">
+            <div class="metric">
+              <span>Collection dang chon</span>
+              <strong id="selectedCollectionLabel">-</strong>
+            </div>
+            <div class="metric">
+              <span>So collections</span>
+              <strong id="collectionCountLabel">0</strong>
+            </div>
+            <div class="metric">
+              <span>Server</span>
+              <strong id="serverStateLabel">Unknown</strong>
+            </div>
+          </div>
         </section>
 
         <section>
-          <h2>Collections</h2>
+          <div class="section-head">
+            <h2>Collections</h2>
+            <button id="listCollectionsBtn" type="button" class="secondary">Refresh</button>
+          </div>
           <div class="row">
             <label>
-              Ten collection
-              <input id="collectionName" list="collectionOptions" placeholder="rag_collection_demo">
+              Collection hien co
+              <select id="collectionSelect">
+                <option value="">Chua co collection</option>
+              </select>
             </label>
             <label>
-              Mo ta
-              <input id="collectionDescription" placeholder="Demo collection">
+              Ten collection moi
+              <input id="collectionName" placeholder="rag_collection_demo" autocomplete="off">
             </label>
           </div>
-          <datalist id="collectionOptions"></datalist>
+          <label class="compact">
+            Mo ta
+            <input id="collectionDescription" placeholder="Demo collection" autocomplete="off">
+          </label>
           <div class="actions">
-            <button id="listCollectionsBtn" type="button" class="secondary">Tai danh sach</button>
             <button id="createCollectionBtn" type="button">Tao collection</button>
             <button id="getCollectionBtn" type="button" class="secondary">Xem thong tin</button>
+            <button id="getRecordsBtn" type="button" class="secondary">Xem chunks</button>
             <button id="deleteCollectionBtn" type="button" class="danger">Xoa collection</button>
           </div>
           <div id="collectionsList" class="collection-list"></div>
         </section>
 
         <section>
-          <h2>Ingest CSV</h2>
+          <div class="section-head">
+            <h2>Ingest</h2>
+            <button id="useSelectedForIngestBtn" type="button" class="ghost">Dung collection dang chon</button>
+          </div>
           <div class="row">
             <label>
-              File CSV
-              <input id="csvFile" type="file" accept=".csv,text/csv">
+              File
+              <input id="uploadFile" type="file" accept=".docx,.pdf,.txt,.text,.csv,.xlsx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
             </label>
             <label>
-              Cot de index
-              <input id="indexColumn" placeholder="content">
+              Collection
+              <select id="ingestCollectionSelect">
+                <option value="">Tu dat ten tu file</option>
+              </select>
             </label>
           </div>
-          <label style="margin-top: 10px;">
-            Collection
-            <input id="ingestCollection" list="collectionOptions" placeholder="rag_collection_demo">
+          <label class="compact">
+            Cot chunking cho CSV/XLSX
+            <input id="indexColumn" placeholder="Bat buoc khi upload CSV/XLSX" autocomplete="off">
           </label>
           <div class="actions">
             <button id="ingestBtn" type="button">Upload va ingest</button>
+            <button id="clearIngestBtn" type="button" class="secondary">Clear ingest</button>
+          </div>
+          <div id="ingestBusy" class="busy-label" aria-live="polite">
+            <span class="spinner" aria-hidden="true"></span>
+            <span id="ingestBusyText">Dang upload, chunking va embedding...</span>
+            <span id="ingestElapsed"></span>
+          </div>
+          <div id="ingestProgress" class="progress" aria-hidden="true">
+            <span id="ingestProgressFill" class="progress-fill"></span>
           </div>
         </section>
 
         <section>
-          <h2>Query RAG</h2>
-          <div class="row">
+          <div class="section-head">
+            <h2>Query RAG</h2>
+            <button id="useSelectedForQueryBtn" type="button" class="ghost">Dung collection dang chon</button>
+          </div>
+          <div class="row three">
             <label>
               Collection
-              <input id="queryCollection" list="collectionOptions" placeholder="rag_collection_demo">
+              <select id="queryCollectionSelect">
+                <option value="">Chon collection</option>
+              </select>
             </label>
             <label>
-              So document lay ra
+              Cot dua vao prompt
+              <input id="columnsToAnswer" placeholder="Bo trong de dung chunk, source" autocomplete="off">
+            </label>
+            <label>
+              So chunk lay ra
               <input id="retrievalCount" type="number" min="1" max="50" value="3">
             </label>
           </div>
-          <label style="margin-top: 10px;">
-            Cot can tra loi
-            <input id="columnsToAnswer" placeholder="content, title">
-          </label>
-          <label style="margin-top: 10px;">
+          <label class="compact">
             Cau hoi
             <textarea id="ragQuery" placeholder="Nhap cau hoi RAG..."></textarea>
           </label>
           <div class="actions">
             <button id="queryBtn" type="button">Query</button>
+            <button id="fillSampleQueryBtn" type="button" class="secondary">Cau hoi mau</button>
+            <button id="clearQueryBtn" type="button" class="secondary">Clear query</button>
           </div>
         </section>
       </div>
 
-      <section>
-        <h2>Ket qua</h2>
+      <section class="output-wrap">
+        <div class="section-head">
+          <h2>Ket qua</h2>
+          <button id="copyOutputBtn" type="button" class="ghost">Copy output</button>
+        </div>
+        <div class="mode-bar">
+          <button id="modeRawBtn" type="button" class="secondary active">Raw</button>
+          <button id="modeAnswerBtn" type="button" class="secondary">Answer</button>
+          <button id="modeRetrievedBtn" type="button" class="secondary">Retrieved</button>
+          <button id="modePromptBtn" type="button" class="secondary">Prompt</button>
+        </div>
         <pre id="output" class="output">San sang.</pre>
         <div class="actions">
           <button id="clearOutputBtn" type="button" class="secondary">Xoa ket qua</button>
@@ -345,32 +650,60 @@
     </div>
   </main>
 
+  <div id="recordsModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="recordsModalTitle">
+    <section class="modal">
+      <div class="section-head">
+        <h2 id="recordsModalTitle">Chunks</h2>
+        <button id="closeRecordsModalBtn" type="button" class="ghost">Dong</button>
+      </div>
+      <div id="recordsModalMeta" class="modal-meta"></div>
+      <div id="recordsModalBody" class="chunk-list"></div>
+    </section>
+  </div>
+
   <script>
     const elements = {
       baseUrl: document.getElementById("baseUrl"),
       status: document.getElementById("status"),
+      selectedCollectionLabel: document.getElementById("selectedCollectionLabel"),
+      collectionCountLabel: document.getElementById("collectionCountLabel"),
+      serverStateLabel: document.getElementById("serverStateLabel"),
       output: document.getElementById("output"),
+      collectionSelect: document.getElementById("collectionSelect"),
       collectionName: document.getElementById("collectionName"),
       collectionDescription: document.getElementById("collectionDescription"),
       collectionsList: document.getElementById("collectionsList"),
-      collectionOptions: document.getElementById("collectionOptions"),
-      csvFile: document.getElementById("csvFile"),
+      uploadFile: document.getElementById("uploadFile"),
       indexColumn: document.getElementById("indexColumn"),
-      ingestCollection: document.getElementById("ingestCollection"),
-      queryCollection: document.getElementById("queryCollection"),
+      ingestCollectionSelect: document.getElementById("ingestCollectionSelect"),
+      ingestBusy: document.getElementById("ingestBusy"),
+      ingestBusyText: document.getElementById("ingestBusyText"),
+      ingestElapsed: document.getElementById("ingestElapsed"),
+      ingestProgress: document.getElementById("ingestProgress"),
+      ingestProgressFill: document.getElementById("ingestProgressFill"),
+      queryCollectionSelect: document.getElementById("queryCollectionSelect"),
       columnsToAnswer: document.getElementById("columnsToAnswer"),
       retrievalCount: document.getElementById("retrievalCount"),
-      ragQuery: document.getElementById("ragQuery")
+      ragQuery: document.getElementById("ragQuery"),
+      recordsModal: document.getElementById("recordsModal"),
+      recordsModalTitle: document.getElementById("recordsModalTitle"),
+      recordsModalMeta: document.getElementById("recordsModalMeta"),
+      recordsModalBody: document.getElementById("recordsModalBody")
+    };
+
+    const state = {
+      collections: [],
+      selectedCollection: localStorage.getItem("ragSelectedCollection") || "",
+      lastPayload: null,
+      outputMode: "raw",
+      ingestStartedAt: 0,
+      ingestTimer: null
     };
 
     const savedBaseUrl = localStorage.getItem("ragApiBaseUrl");
     if (savedBaseUrl) {
       elements.baseUrl.value = savedBaseUrl;
     }
-
-    elements.baseUrl.addEventListener("change", () => {
-      localStorage.setItem("ragApiBaseUrl", elements.baseUrl.value.trim());
-    });
 
     function baseUrl() {
       return elements.baseUrl.value.trim().replace(/\/+$/, "");
@@ -380,17 +713,90 @@
       return `${baseUrl()}${path}`;
     }
 
-    function writeOutput(data) {
-      if (typeof data === "string") {
-        elements.output.textContent = data;
-        return;
-      }
-      elements.output.textContent = JSON.stringify(data, null, 2);
-    }
-
     function setStatus(text, ok) {
       elements.status.textContent = text;
       elements.status.style.color = ok ? "var(--primary)" : "var(--muted)";
+      elements.serverStateLabel.textContent = ok ? "OK" : "Unknown";
+    }
+
+    function setSelectedCollection(name) {
+      state.selectedCollection = name || "";
+      localStorage.setItem("ragSelectedCollection", state.selectedCollection);
+      elements.selectedCollectionLabel.textContent = state.selectedCollection || "-";
+
+      [elements.collectionSelect, elements.ingestCollectionSelect, elements.queryCollectionSelect].forEach((select) => {
+        if ([...select.options].some((option) => option.value === state.selectedCollection)) {
+          select.value = state.selectedCollection;
+        } else if (!state.selectedCollection) {
+          select.value = "";
+        }
+      });
+
+      renderCollectionList();
+    }
+
+    function selectedCollection() {
+      return state.selectedCollection || elements.collectionSelect.value.trim();
+    }
+
+    function selectedIngestCollection() {
+      return elements.ingestCollectionSelect.value.trim();
+    }
+
+    function selectedQueryCollection() {
+      return elements.queryCollectionSelect.value.trim() || selectedCollection();
+    }
+
+    function formatData(data) {
+      if (typeof data === "string") {
+        return data;
+      }
+      return JSON.stringify(data, null, 2);
+    }
+
+    function valueFromPayload(payload, key) {
+      if (!payload || typeof payload !== "object") {
+        return "";
+      }
+      return payload[key] || "";
+    }
+
+    function renderOutput() {
+      const payload = state.lastPayload;
+      if (!payload) {
+        elements.output.textContent = "San sang.";
+        return;
+      }
+
+      if (state.outputMode === "answer") {
+        elements.output.textContent = valueFromPayload(payload, "answer") || formatData(payload);
+        return;
+      }
+
+      if (state.outputMode === "retrieved") {
+        elements.output.textContent = valueFromPayload(payload, "retrieved_data") || formatData(payload);
+        return;
+      }
+
+      if (state.outputMode === "prompt") {
+        elements.output.textContent = valueFromPayload(payload, "full_prompt") || formatData(payload);
+        return;
+      }
+
+      elements.output.textContent = formatData(payload);
+    }
+
+    function writeOutput(data) {
+      state.lastPayload = data;
+      renderOutput();
+    }
+
+    function setOutputMode(mode) {
+      state.outputMode = mode;
+      document.querySelectorAll(".mode-bar button").forEach((button) => {
+        button.classList.toggle("active", button.id.toLowerCase().includes(mode));
+      });
+      renderOutput();
     }
 
     async function request(path, options = {}) {
@@ -408,6 +814,47 @@
       return payload;
     }
 
+    function uploadFormData(path, formData, onUploadProgress) {
+      return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", endpoint(path));
+
+        xhr.upload.addEventListener("progress", (event) => {
+          if (event.lengthComputable) {
+            onUploadProgress(Math.round((event.loaded / event.total) * 100));
+          }
+        });
+
+        xhr.upload.addEventListener("load", () => {
+          onUploadProgress(100);
+        });
+
+        xhr.addEventListener("load", () => {
+          const contentType = xhr.getResponseHeader("content-type") || "";
+          let payload = xhr.responseText;
+          if (contentType.includes("application/json") && xhr.responseText) {
+            try {
+              payload = JSON.parse(xhr.responseText);
+            } catch (error) {
+              reject(error);
+              return;
+            }
+          }
+
+          if (xhr.status < 200 || xhr.status >= 300) {
+            reject(new Error(typeof payload === "object" ? JSON.stringify(payload, null, 2) : payload));
+            return;
+          }
+
+          resolve(payload);
+        });
+
+        xhr.addEventListener("error", () => reject(new Error("Network error while ingesting.")));
+        xhr.addEventListener("abort", () => reject(new Error("Ingest request was aborted.")));
+        xhr.send(formData);
+      });
+    }
+
     async function runAction(label, action) {
       try {
         setStatus(`${label}...`, false);
@@ -422,42 +869,152 @@
       }
     }
 
-    function selectedCollection() {
-      return elements.collectionName.value.trim();
+    async function runSilentAction(label, action) {
+      try {
+        setStatus(`${label}...`, false);
+        await action();
+        setStatus(`${label} OK`, true);
+      } catch (error) {
+        writeOutput(error.message || String(error));
+        setStatus(`${label} loi`, false);
+      }
     }
 
-    function syncCollectionInputs(name) {
-      elements.collectionName.value = name;
-      elements.ingestCollection.value = name;
-      elements.queryCollection.value = name;
+    function setIngestLoading(isLoading) {
+      const controls = [
+        elements.uploadFile,
+        elements.indexColumn,
+        elements.ingestCollectionSelect,
+        document.getElementById("ingestBtn"),
+        document.getElementById("clearIngestBtn"),
+        document.getElementById("useSelectedForIngestBtn")
+      ];
+
+      controls.forEach((control) => {
+        control.disabled = isLoading;
+      });
+
+      document.getElementById("ingestBtn").textContent = isLoading
+        ? "Dang ingest..."
+        : "Upload va ingest";
+      elements.ingestBusy.classList.toggle("active", isLoading);
+      elements.ingestProgress.classList.toggle("active", isLoading);
+
+      if (isLoading) {
+        state.ingestStartedAt = Date.now();
+        setIngestProgress(0, "Dang upload file...");
+        state.ingestTimer = window.setInterval(updateIngestElapsed, 1000);
+        updateIngestElapsed();
+      } else {
+        if (state.ingestTimer) {
+          window.clearInterval(state.ingestTimer);
+          state.ingestTimer = null;
+        }
+        state.ingestStartedAt = 0;
+        elements.ingestElapsed.textContent = "";
+        setIngestProgress(0, "Dang upload, chunking va embedding...");
+      }
     }
 
-    function renderCollections(names) {
-      elements.collectionOptions.innerHTML = "";
-      elements.collectionsList.innerHTML = "";
+    function setIngestProgress(percent, label, indeterminate = false) {
+      const boundedPercent = Math.min(Math.max(percent, 0), 100);
+      elements.ingestBusyText.textContent = label;
+      elements.ingestProgress.classList.toggle("indeterminate", indeterminate);
+      elements.ingestProgressFill.style.width = indeterminate ? "0%" : `${boundedPercent}%`;
+    }
+
+    function updateIngestElapsed() {
+      if (!state.ingestStartedAt) {
+        elements.ingestElapsed.textContent = "";
+        return;
+      }
+
+      const seconds = Math.floor((Date.now() - state.ingestStartedAt) / 1000);
+      elements.ingestElapsed.textContent = `(${seconds}s)`;
+    }
+
+    function renderSelect(select, names, emptyText) {
+      const current = select.value;
+      select.innerHTML = "";
+
+      const emptyOption = document.createElement("option");
+      emptyOption.value = "";
+      emptyOption.textContent = emptyText;
+      select.appendChild(emptyOption);
 
       names.forEach((name) => {
         const option = document.createElement("option");
         option.value = name;
-        elements.collectionOptions.appendChild(option);
+        option.textContent = name;
+        select.appendChild(option);
+      });
 
+      if (names.includes(current)) {
+        select.value = current;
+      } else if (names.includes(state.selectedCollection)) {
+        select.value = state.selectedCollection;
+      }
+    }
+
+    function renderCollectionList() {
+      elements.collectionsList.innerHTML = "";
+
+      if (!state.collections.length) {
+        const empty = document.createElement("div");
+        empty.className = "subtle";
+        empty.textContent = "Chua co collection.";
+        elements.collectionsList.appendChild(empty);
+        return;
+      }
+
+      state.collections.forEach((name) => {
         const item = document.createElement("div");
-        item.className = "collection-item";
+        item.className = `collection-item${name === state.selectedCollection ? " active" : ""}`;
 
         const title = document.createElement("span");
         title.className = "collection-name";
         title.textContent = name;
 
+        const actions = document.createElement("div");
+        actions.className = "mini-actions";
+
         const useButton = document.createElement("button");
         useButton.type = "button";
         useButton.className = "secondary";
         useButton.textContent = "Chon";
-        useButton.addEventListener("click", () => syncCollectionInputs(name));
+        useButton.addEventListener("click", () => setSelectedCollection(name));
 
+        const infoButton = document.createElement("button");
+        infoButton.type = "button";
+        infoButton.className = "ghost";
+        infoButton.textContent = "Info";
+        infoButton.addEventListener("click", () => {
+          setSelectedCollection(name);
+          runAction("Get collection", () => request(`/collections/${encodeURIComponent(name)}`));
+        });
+
+        actions.appendChild(useButton);
+        actions.appendChild(infoButton);
         item.appendChild(title);
-        item.appendChild(useButton);
+        item.appendChild(actions);
         elements.collectionsList.appendChild(item);
       });
+    }
+
+    function renderCollections(names) {
+      state.collections = [...new Set(names)].sort((a, b) => a.localeCompare(b));
+      elements.collectionCountLabel.textContent = String(state.collections.length);
+      renderSelect(elements.collectionSelect, state.collections, "Chon collection");
+      renderSelect(elements.ingestCollectionSelect, state.collections, "Tu dat ten tu file");
+      renderSelect(elements.queryCollectionSelect, state.collections, "Chon collection");
+
+      if (state.collections.includes(state.selectedCollection)) {
+        setSelectedCollection(state.selectedCollection);
+      } else if (state.collections.length) {
+        setSelectedCollection(state.collections[0]);
+      } else {
+        setSelectedCollection("");
+      }
     }
 
     async function listCollections() {
@@ -465,6 +1022,156 @@
       renderCollections(payload.collections || []);
       return payload;
     }
+
+    function ensureCollectionName(name) {
+      if (!name) {
+        throw new Error("Chua chon collection.");
+      }
+      return name;
+    }
+
+    function fileExtension(fileName) {
+      const parts = fileName.toLowerCase().split(".");
+      return parts.length > 1 ? parts.pop() : "";
+    }
+
+    function closeRecordsModal() {
+      elements.recordsModal.classList.remove("active");
+    }
+
+    function openRecordsModal() {
+      elements.recordsModal.classList.add("active");
+    }
+
+    function renderRecordsModal(payload) {
+      const metadatas = Array.isArray(payload.metadatas) ? payload.metadatas : [];
+      const ids = Array.isArray(payload.ids) ? payload.ids : [];
+      const total = payload.count ?? metadatas.length;
+      elements.recordsModalTitle.textContent = `Chunks - ${payload.collection_name || selectedCollection()}`;
+      elements.recordsModalMeta.textContent = `Dang hien thi ${metadatas.length}/${total} chunks`;
+      elements.recordsModalBody.innerHTML = "";
+
+      if (!metadatas.length) {
+        const empty = document.createElement("div");
+        empty.className = "subtle";
+        empty.textContent = "Collection nay chua co chunk nao.";
+        elements.recordsModalBody.appendChild(empty);
+        openRecordsModal();
+        return;
+      }
+
+      metadatas.forEach((metadata, index) => {
+        const item = document.createElement("article");
+        item.className = "chunk-item";
+
+        const title = document.createElement("div");
+        title.className = "chunk-title";
+
+        const chunkNo = document.createElement("span");
+        chunkNo.textContent = `Chunk ${index + 1}`;
+
+        const chunkIndex = document.createElement("span");
+        chunkIndex.textContent = metadata && metadata.chunk_index
+          ? `#${metadata.chunk_index}`
+          : "";
+
+        title.appendChild(chunkNo);
+        title.appendChild(chunkIndex);
+
+        const meta = document.createElement("div");
+        meta.className = "chunk-meta";
+        const id = ids[index] || "";
+        const source = metadata && (metadata.source || metadata.file_name || metadata.doc_id || "");
+        meta.textContent = [source ? `source: ${source}` : "", id ? `id: ${id}` : ""]
+          .filter(Boolean)
+          .join(" | ");
+
+        const text = document.createElement("div");
+        text.className = "chunk-text";
+        text.textContent = metadata && metadata.chunk
+          ? metadata.chunk
+          : formatData(metadata);
+
+        item.appendChild(title);
+        if (meta.textContent) {
+          item.appendChild(meta);
+        }
+        item.appendChild(text);
+        elements.recordsModalBody.appendChild(item);
+      });
+
+      openRecordsModal();
+    }
+
+    function validateIngestForm() {
+      const file = elements.uploadFile.files[0];
+      if (!file) {
+        throw new Error("Chua chon file.");
+      }
+
+      const extension = fileExtension(file.name);
+      if (["csv", "xlsx"].includes(extension) && !elements.indexColumn.value.trim()) {
+        throw new Error("CSV/XLSX can cot chunking.");
+      }
+
+      return file;
+    }
+
+    function resetUploadFileInput() {
+      const currentInput = elements.uploadFile;
+      const nextInput = currentInput.cloneNode(true);
+      nextInput.value = "";
+      currentInput.replaceWith(nextInput);
+      elements.uploadFile = nextInput;
+    }
+
+    function columnsToAnswer() {
+      return elements.columnsToAnswer.value
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+    }
+
+    async function copyText(text) {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        return;
+      }
+
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.style.position = "fixed";
+      textarea.style.left = "-9999px";
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+    }
+
+    elements.baseUrl.addEventListener("change", () => {
+      localStorage.setItem("ragApiBaseUrl", elements.baseUrl.value.trim());
+    });
+
+    elements.collectionSelect.addEventListener("change", () => {
+      setSelectedCollection(elements.collectionSelect.value);
+    });
+
+    elements.ingestCollectionSelect.addEventListener("change", () => {
+      if (elements.ingestCollectionSelect.value) {
+        setSelectedCollection(elements.ingestCollectionSelect.value);
+      }
+    });
+
+    elements.queryCollectionSelect.addEventListener("change", () => {
+      if (elements.queryCollectionSelect.value) {
+        setSelectedCollection(elements.queryCollectionSelect.value);
+      }
+    });
+
+    document.getElementById("docsBtn").addEventListener("click", () => {
+      window.open(endpoint("/docs"), "_blank", "noopener");
+    });
 
     document.getElementById("healthBtn").addEventListener("click", () => {
       runAction("Health", () => request("/health"));
@@ -476,8 +1183,13 @@
 
     document.getElementById("createCollectionBtn").addEventListener("click", () => {
       runAction("Create collection", async () => {
+        const name = elements.collectionName.value.trim();
+        if (!name) {
+          throw new Error("Nhap ten collection moi.");
+        }
+
         const body = {
-          name: selectedCollection(),
+          name,
           description: elements.collectionDescription.value.trim() || null
         };
         const payload = await request("/collections", {
@@ -486,61 +1198,105 @@
           body: JSON.stringify(body)
         });
         await listCollections();
+        setSelectedCollection(payload.name || name);
         return payload;
       });
     });
 
     document.getElementById("getCollectionBtn").addEventListener("click", () => {
       runAction("Get collection", () => {
-        const name = encodeURIComponent(selectedCollection());
+        const name = encodeURIComponent(ensureCollectionName(selectedCollection()));
         return request(`/collections/${name}`);
+      });
+    });
+
+    document.getElementById("getRecordsBtn").addEventListener("click", () => {
+      runSilentAction("Get chunks", async () => {
+        const name = encodeURIComponent(ensureCollectionName(selectedCollection()));
+        const info = await request(`/collections/${name}`);
+        const count = Math.min(Number(info.count || 0), 5000);
+        const payload = await request(`/collections/${name}/records?limit=${Math.max(count, 1)}&offset=0`);
+        renderRecordsModal(payload);
       });
     });
 
     document.getElementById("deleteCollectionBtn").addEventListener("click", () => {
       runAction("Delete collection", async () => {
-        const name = encodeURIComponent(selectedCollection());
-        const payload = await request(`/collections/${name}`, { method: "DELETE" });
-        await listCollections();
-        return payload;
-      });
-    });
-
-    document.getElementById("ingestBtn").addEventListener("click", () => {
-      runAction("Ingest", async () => {
-        const file = elements.csvFile.files[0];
-        if (!file) {
-          throw new Error("Chua chon file CSV.");
+        const name = ensureCollectionName(selectedCollection());
+        if (!window.confirm(`Xoa collection "${name}"?`)) {
+          return "Da huy xoa collection.";
         }
 
-        const formData = new FormData();
-        formData.append("file", file);
-        formData.append("index_column", elements.indexColumn.value.trim());
-        const collectionName = elements.ingestCollection.value.trim();
-        if (collectionName) {
-          formData.append("collection_name", collectionName);
-        }
-
-        const payload = await request("/ingest", {
-          method: "POST",
-          body: formData
+        const payload = await request(`/collections/${encodeURIComponent(name)}`, {
+          method: "DELETE"
         });
         await listCollections();
         return payload;
       });
     });
 
+    document.getElementById("useSelectedForIngestBtn").addEventListener("click", () => {
+      elements.ingestCollectionSelect.value = selectedCollection();
+    });
+
+    document.getElementById("useSelectedForQueryBtn").addEventListener("click", () => {
+      elements.queryCollectionSelect.value = selectedCollection();
+    });
+
+    document.getElementById("ingestBtn").addEventListener("click", () => {
+      runAction("Ingest", async () => {
+        setIngestLoading(true);
+        try {
+          const file = validateIngestForm();
+          const formData = new FormData();
+          formData.append("file", file);
+
+          const indexColumn = elements.indexColumn.value.trim();
+          if (indexColumn) {
+            formData.append("index_column", indexColumn);
+          }
+
+          const collectionName = selectedIngestCollection();
+          if (collectionName) {
+            formData.append("collection_name", collectionName);
+          }
+
+          const payload = await uploadFormData("/ingest", formData, (percent) => {
+            if (percent >= 100) {
+              setIngestProgress(100, "Da upload xong, server dang chunking va embedding...", true);
+            } else {
+              setIngestProgress(percent, `Dang upload file... ${percent}%`);
+            }
+          });
+          await listCollections();
+          if (payload.collection_name) {
+            setSelectedCollection(payload.collection_name);
+          }
+          return payload;
+        } finally {
+          setIngestLoading(false);
+        }
+      });
+    });
+
+    document.getElementById("clearIngestBtn").addEventListener("click", () => {
+      resetUploadFileInput();
+      elements.indexColumn.value = "";
+      elements.ingestCollectionSelect.value = selectedCollection() || "";
+      setStatus("Da clear ingest form", true);
+    });
+
     document.getElementById("queryBtn").addEventListener("click", () => {
       runAction("Query", () => {
-        const collectionName = encodeURIComponent(elements.queryCollection.value.trim());
-        const columns = elements.columnsToAnswer.value
-          .split(",")
-          .map((item) => item.trim())
-          .filter(Boolean);
+        const collectionName = encodeURIComponent(ensureCollectionName(selectedQueryCollection()));
+        const query = elements.ragQuery.value.trim();
+        if (!query) {
+          throw new Error("Nhap cau hoi.");
+        }
 
         const body = {
-          query: elements.ragQuery.value.trim(),
-          columns_to_answer: columns,
+          query,
+          columns_to_answer: columnsToAnswer(),
           number_docs_retrieval: Number(elements.retrievalCount.value || 3)
         };
 
@@ -552,10 +1308,54 @@
       });
     });
 
+    document.getElementById("fillSampleQueryBtn").addEventListener("click", () => {
+      elements.ragQuery.value = "Tom tat cac thong tin quan trong trong tai lieu nay.";
+      if (!elements.columnsToAnswer.value.trim()) {
+        elements.columnsToAnswer.value = "chunk, source";
+      }
+    });
+
+    document.getElementById("clearQueryBtn").addEventListener("click", () => {
+      elements.ragQuery.value = "";
+      elements.columnsToAnswer.value = "";
+      elements.retrievalCount.value = "3";
+      elements.queryCollectionSelect.value = selectedCollection() || "";
+    });
+
+    document.getElementById("copyOutputBtn").addEventListener("click", () => {
+      runSilentAction("Copy output", async () => {
+        await copyText(elements.output.textContent);
+      });
+    });
+
     document.getElementById("clearOutputBtn").addEventListener("click", () => {
-      writeOutput("San sang.");
+      state.lastPayload = null;
+      renderOutput();
       setStatus("Chua ket noi", false);
     });
+
+    document.getElementById("modeRawBtn").addEventListener("click", () => setOutputMode("raw"));
+    document.getElementById("modeAnswerBtn").addEventListener("click", () => setOutputMode("answer"));
+    document.getElementById("modeRetrievedBtn").addEventListener("click", () => setOutputMode("retrieved"));
+    document.getElementById("modePromptBtn").addEventListener("click", () => setOutputMode("prompt"));
+
+    document.getElementById("closeRecordsModalBtn").addEventListener("click", closeRecordsModal);
+    elements.recordsModal.addEventListener("click", (event) => {
+      if (event.target === elements.recordsModal) {
+        closeRecordsModal();
+      }
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        closeRecordsModal();
+      }
+    });
+
+    elements.selectedCollectionLabel.textContent = state.selectedCollection || "-";
+    renderCollectionList();
+    listCollections()
+      .then(() => setStatus("Auto refresh OK", true))
+      .catch(() => setStatus("Chua ket noi", false));
   </script>
 </body>
 </html>

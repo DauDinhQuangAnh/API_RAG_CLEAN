@@ -1,72 +1,78 @@
-# Tạo venv & chạy API
+# RAG API
+
+## Chay local
+
+```bash
 python -m venv .venv
 .\.venv\Scripts\activate.bat
 pip install -r requirements.txt
 uvicorn API_RAG_NEW.main:app --host 0.0.0.0 --port 8000
-ngrok http 8000 --authtoken 3ATrkoV53hkN7BiSFRulmhXogXx_4i5pFjfLNexGcA7qrD6mU
-## Các API chính (base URL: http://127.0.0.1:8000)
+```
+.\python\python.exe -m uvicorn API_RAG_NEW.main:app --host 0.0.0.0 --port 8000
 
-- **Health**: `GET /health` → trả `{ "status": "ok" }`
-- **List collections**: `GET /collections`
-- **Tạo collection**: `POST /collections`
-  - Body: `{ "name": "rag_collection_demo", "description": "Demo" }`
-- **Xem 1 collection**: `GET /collections/{collection_name}`
-- **Sửa collection**: `PATCH /collections/{collection_name}`
-  - Body (ít nhất 1 field): `{ "new_name": "new_name", "metadata": { ... } }`
-- **Xóa collection**: `DELETE /collections/{collection_name}`
-- **Ingest CSV**: `POST /ingest`
-  - Form-data: `file` (CSV), `index_column`, `collection_name` (optional)
-- **Query RAG**: `POST /collections/{collection_name}/query`
-  - Body:
-    `{ "query": "...", "columns_to_answer": [...], "number_docs_retrieval": 3, "gemini_api_key": "..." (optional) }`
+Base URL mac dinh: `http://127.0.0.1:8000`
 
-## Ví dụ nhanh (curl)
+## API chinh
 
-- **Health – GET /health**
-  ```bash
-  curl http://127.0.0.1:8000/health
-  ```
+- `GET /health`: kiem tra server.
+- `GET /collections`: lay danh sach collections.
+- `POST /collections`: tao collection.
+- `GET /collections/{collection_name}`: xem thong tin collection.
+- `PATCH /collections/{collection_name}`: sua ten hoac metadata collection.
+- `DELETE /collections/{collection_name}`: xoa collection.
+- `POST /ingest`: ingest file document hoac bang du lieu.
+- `POST /collections/{collection_name}/query`: hoi dap RAG tren collection.
 
-- **List collections – GET /collections**
-  ```bash
-  curl http://127.0.0.1:8000/collections
-  ```
+## Ingest document va bang du lieu
 
-- **Tạo collection – POST /collections**
-  ```bash
-  curl -X POST http://127.0.0.1:8000/collections ^
-    -H "Content-Type: application/json" ^
-    -d "{\"name\": \"rag_collection_demo\", \"description\": \"Demo\"}"
-  ```
+Flow document dung file `.docx`, `.pdf`, `.txt`, `.text`. API se doc noi dung file va chunk truc tiep toan bo text.
 
-- **Xem 1 collection – GET /collections/{collection_name}**
-  ```bash
-  curl http://127.0.0.1:8000/collections/rag_collection_demo
-  ```
+```bash
+curl -X POST http://127.0.0.1:8000/ingest ^
+  -F "file=@document.pdf" ^
+  -F "collection_name=rag_collection_demo"
+```
 
-- **Sửa collection – PATCH /collections/{collection_name}**
-  ```bash
-  curl -X PATCH http://127.0.0.1:8000/collections/rag_collection_demo ^
-    -H "Content-Type: application/json" ^
-    -d "{\"new_name\": \"rag_collection_new\", \"metadata\": {\"description\": \"Updated\"}}"
-  ```
+Metadata cho document chunk:
 
-- **Xóa collection – DELETE /collections/{collection_name}**
-  ```bash
-  curl -X DELETE http://127.0.0.1:8000/collections/rag_collection_new
-  ```
+- `chunk`
+- `doc_id`
+- `source`
+- `source_type`
+- `chunk_index`
 
-- **Ingest CSV – POST /ingest**
-  ```bash
-  curl -X POST http://127.0.0.1:8000/ingest ^
-    -F "file=@data.csv" ^
-    -F "index_column=content" ^
-    -F "collection_name=rag_collection_demo"
-  ```
+Flow bang du lieu dung file `.csv` hoac `.xlsx`. Khi upload CSV/XLSX, bat buoc truyen `index_column` de chon cot chunking:
 
-- **Query RAG – POST /collections/{collection_name}/query**
-  ```bash
-  curl -X POST http://127.0.0.1:8000/collections/rag_collection_demo/query ^
-    -H "Content-Type: application/json" ^
-    -d "{\"query\": \"Hỏi gì đó...\", \"columns_to_answer\": [\"content\"], \"number_docs_retrieval\": 3}"
-  ```
+```bash
+curl -X POST http://127.0.0.1:8000/ingest ^
+  -F "file=@data.csv" ^
+  -F "index_column=content" ^
+  -F "collection_name=rag_collection_demo"
+```
+
+```bash
+curl -X POST http://127.0.0.1:8000/ingest ^
+  -F "file=@data.xlsx" ^
+  -F "index_column=description" ^
+  -F "collection_name=rag_collection_demo"
+```
+
+Voi CSV/XLSX, API se chunk noi dung trong `index_column` va van luu cac cot con lai cua tung row vao metadata.
+
+## Query RAG
+
+Co the bo trong `columns_to_answer`; API se mac dinh dua `chunk`, `source`, `source_type`, `chunk_index` vao prompt neu co.
+
+```bash
+curl -X POST http://127.0.0.1:8000/collections/rag_collection_demo/query ^
+  -H "Content-Type: application/json" ^
+  -d "{\"query\": \"Noi dung tai lieu noi gi ve dieu kien giao hang?\", \"number_docs_retrieval\": 3}"
+```
+
+Neu muon chi dinh metadata dua vao prompt:
+
+```bash
+curl -X POST http://127.0.0.1:8000/collections/rag_collection_demo/query ^
+  -H "Content-Type: application/json" ^
+  -d "{\"query\": \"Tom tat tai lieu\", \"columns_to_answer\": [\"chunk\", \"source\"], \"number_docs_retrieval\": 3}"
+```

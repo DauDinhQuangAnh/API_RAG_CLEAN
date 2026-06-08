@@ -41,9 +41,6 @@ def format_retrieved_data(
     metadatas: list[dict[str, Any]], columns_to_answer: Sequence[str]
 ) -> str:
     lines: list[str] = []
-    normalized_columns = [
-        (str(column), str(column).casefold()) for column in columns_to_answer
-    ]
     available_columns: set[str] = set()
     normalized_metadatas: list[dict[str, Any]] = []
 
@@ -56,6 +53,19 @@ def format_retrieved_data(
             available_columns.update(normalized_metadata.keys())
         normalized_metadatas.append(normalized_metadata)
 
+    if columns_to_answer:
+        selected_columns = list(columns_to_answer)
+    else:
+        default_columns = ["chunk", "source", "source_type", "chunk_index"]
+        selected_columns = [
+            column for column in default_columns if column.casefold() in available_columns
+        ]
+        if not selected_columns:
+            selected_columns = sorted(available_columns)
+
+    normalized_columns = [
+        (str(column), str(column).casefold()) for column in selected_columns
+    ]
     missing_columns = [
         column
         for column, normalized_column in normalized_columns
