@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import hashlib
 import math
+import unicodedata
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Sequence
@@ -175,9 +176,17 @@ def format_retrieved_data_with_markers(
         chunk_type = normalized_metadata.get("chunk_type")
         if chunk_type:
             header_parts.append(f"chunk_type={_display_value(chunk_type)}")
+        table_title = normalized_metadata.get("table_title")
+        if table_title:
+            header_parts.append(f"table_title={_display_value(table_title)}")
         table_row_index = normalized_metadata.get("table_row_index")
         if table_row_index is not None:
             header_parts.append(f"table_row={_display_value(table_row_index)}")
+        table_row_part_index = normalized_metadata.get("table_row_part_index")
+        if table_row_part_index is not None:
+            header_parts.append(
+                f"table_row_part={_display_value(table_row_part_index)}"
+            )
         header = (
             f"[{index}] "
             f"source={_display_value(normalized_metadata.get('source'))}"
@@ -210,9 +219,14 @@ def vector_search(
     include_neighbors: bool = False,
     reranker_type: str = "none",
     rerank_llm: Any | None = None,
+    max_context_expansion_per_candidate: int = 3,
+    max_total_candidates: int = 40,
+    enable_distance_guard: bool = False,
+    max_distance: float | None = None,
 ) -> tuple[list[Any], str]:
     final_n = max(1, int(number_docs_retrieval))
     initial_n = max(final_n, int(initial_top_k or final_n))
+    query_hints = detect_query_hints(query)
     query_embeddings = model.encode([query])
     search_results = collection.query(
         query_embeddings=query_embeddings,
@@ -220,8 +234,22 @@ def vector_search(
         include=["metadatas", "documents", "distances"],
     )
     candidates = _chunks_from_query_results(search_results)
+    if _distance_guard_blocks(candidates, enable_distance_guard, max_distance):
+        return [[]], ""
+
+    initial_candidate_ids = [chunk.id for chunk in candidates]
     if include_neighbors:
-        candidates = _expand_neighbor_chunks(collection, candidates)
+        candidates = _expand_context_chunks(
+            collection,
+            candidates,
+            max_context_expansion_per_candidate=max_context_expansion_per_candidate,
+        )
+    candidates = _cap_candidates(
+        candidates,
+        max_total_candidates=max_total_candidates,
+        initial_candidate_ids=initial_candidate_ids,
+        query_hints=query_hints,
+    )
 
     if not candidates:
         return [[]], ""
@@ -232,12 +260,93 @@ def vector_search(
         final_n,
         reranker_type=reranker_type,
         rerank_llm=rerank_llm,
+        query_hints=query_hints,
     )
     final_metadatas = [chunk.metadata for chunk in ranked_chunks]
     return [final_metadatas], format_retrieved_data_with_markers(
         final_metadatas,
         columns_to_answer,
     )
+
+
+def detect_query_hints(query: str) -> dict[str, bool]:
+    normalized = _normalize_query_text(query)
+    return {
+        "asks_table_or_structured_info": _contains_any(
+            normalized,
+            (
+                "table",
+                "row",
+                "column",
+                "bang",
+                "dong",
+                "cot",
+                "tieu chi",
+                "so sanh",
+                "criteria",
+                "comparison",
+                "field",
+                "structured",
+            ),
+        ),
+        "asks_number_or_money": _contains_any(
+            normalized,
+            (
+                "gia",
+                "phi",
+                "chi phi",
+                "doanh thu",
+                "revenue",
+                "cost",
+                "price",
+                "fee",
+                "vnd",
+                "dong",
+                "usd",
+                "%",
+            ),
+        ),
+        "asks_person_or_entity": _contains_any(
+            normalized,
+            (
+                "ai",
+                "nguoi nao",
+                "ten",
+                "thanh vien",
+                "truong nhom",
+                "founder",
+                "co founder",
+                "leader",
+                "member",
+                "person",
+            ),
+        ),
+        "asks_source_or_page": _contains_any(
+            normalized,
+            (
+                "trang",
+                "nguon",
+                "source",
+                "page",
+                "citation",
+                "tai lieu",
+            ),
+        ),
+    }
+
+
+def _normalize_query_text(text: str) -> str:
+    normalized = unicodedata.normalize("NFKD", text or "")
+    without_marks = "".join(
+        char for char in normalized if not unicodedata.combining(char)
+    )
+    without_marks = without_marks.casefold()
+    without_marks = without_marks.replace("\u0111", "d").replace("\u0110", "d")
+    return re.sub(r"\s+", " ", without_marks).strip()
+
+
+def _contains_any(text: str, needles: Sequence[str]) -> bool:
+    return any(needle in text for needle in needles)
 
 
 def _normalize_metadatas_for_display(
@@ -327,14 +436,27 @@ def _expand_neighbor_chunks(
     collection: Any,
     candidates: Sequence[RetrievedChunk],
 ) -> list[RetrievedChunk]:
+    return _expand_context_chunks(
+        collection,
+        candidates,
+        max_context_expansion_per_candidate=0,
+    )
+
+
+def _expand_context_chunks(
+    collection: Any,
+    candidates: Sequence[RetrievedChunk],
+    *,
+    max_context_expansion_per_candidate: int,
+) -> list[RetrievedChunk]:
     expanded: list[RetrievedChunk] = list(candidates)
     records_by_doc_id: dict[str, list[RetrievedChunk]] = {}
     next_rank = len(expanded)
+    per_candidate_limit = max(0, int(max_context_expansion_per_candidate))
 
     for candidate in candidates:
         doc_id = candidate.metadata.get("doc_id")
-        chunk_index = _safe_int(candidate.metadata.get("chunk_index"))
-        if not doc_id or chunk_index is None:
+        if not doc_id:
             continue
 
         doc_id = str(doc_id)
@@ -344,21 +466,120 @@ def _expand_neighbor_chunks(
             except Exception:
                 records_by_doc_id[doc_id] = []
 
+    for candidate in candidates:
+        doc_records = _doc_records_for_candidate(candidate, records_by_doc_id)
+        chunk_index = _safe_int(candidate.metadata.get("chunk_index"))
+        if chunk_index is None:
+            continue
         for neighbor_index in (chunk_index - 1, chunk_index + 1):
-            for record in records_by_doc_id[doc_id]:
+            for record in doc_records:
                 if _safe_int(record.metadata.get("chunk_index")) == neighbor_index:
-                    expanded.append(
-                        RetrievedChunk(
-                            id=record.id,
-                            document=record.document,
-                            metadata=record.metadata,
-                            distance=record.distance,
-                            vector_rank=next_rank,
-                        )
-                    )
+                    expanded.append(_with_vector_rank(record, next_rank))
                     next_rank += 1
 
+    for candidate in candidates:
+        doc_records = _doc_records_for_candidate(candidate, records_by_doc_id)
+        parent_id = candidate.metadata.get("parent_id")
+        if not parent_id:
+            continue
+        for record in _limited_matches(
+            doc_records,
+            lambda record: (
+                record.id != candidate.id
+                and record.metadata.get("parent_id") == parent_id
+            ),
+            per_candidate_limit,
+        ):
+            expanded.append(_with_vector_rank(record, next_rank))
+            next_rank += 1
+
+    for candidate in candidates:
+        if candidate.metadata.get("chunk_type") != "table_row":
+            continue
+        doc_records = _doc_records_for_candidate(candidate, records_by_doc_id)
+        table_index = candidate.metadata.get("table_index")
+        page_number = candidate.metadata.get("page_number")
+        if table_index is None or page_number is None:
+            continue
+        for record in _limited_matches(
+            doc_records,
+            lambda record: (
+                record.id != candidate.id
+                and record.metadata.get("chunk_type") == "table_row"
+                and record.metadata.get("table_index") == table_index
+                and record.metadata.get("page_number") == page_number
+            ),
+            per_candidate_limit,
+        ):
+            expanded.append(_with_vector_rank(record, next_rank))
+            next_rank += 1
+
+    for candidate in candidates:
+        doc_records = _doc_records_for_candidate(candidate, records_by_doc_id)
+        section_path = candidate.metadata.get("section_path")
+        if not section_path:
+            continue
+        for record in _limited_matches(
+            doc_records,
+            lambda record: (
+                record.id != candidate.id
+                and record.metadata.get("section_path") == section_path
+            ),
+            per_candidate_limit,
+        ):
+            expanded.append(_with_vector_rank(record, next_rank))
+            next_rank += 1
+
     return _dedupe_chunks(expanded)
+
+
+def _doc_records_for_candidate(
+    candidate: RetrievedChunk,
+    records_by_doc_id: dict[str, list[RetrievedChunk]],
+) -> list[RetrievedChunk]:
+    doc_id = candidate.metadata.get("doc_id")
+    if not doc_id:
+        return []
+    return records_by_doc_id.get(str(doc_id), [])
+
+
+def _limited_matches(
+    records: Sequence[RetrievedChunk],
+    predicate: Any,
+    limit: int,
+) -> list[RetrievedChunk]:
+    if limit <= 0:
+        return []
+    matches: list[RetrievedChunk] = []
+    for record in _records_in_doc_order(records):
+        if predicate(record):
+            matches.append(record)
+        if len(matches) >= limit:
+            break
+    return matches
+
+
+def _records_in_doc_order(records: Sequence[RetrievedChunk]) -> list[RetrievedChunk]:
+    return sorted(
+        records,
+        key=lambda record: (
+            _safe_int(record.metadata.get("chunk_index")) is None,
+            _safe_int(record.metadata.get("chunk_index")) or 0,
+            _safe_int(record.metadata.get("page_chunk_index")) or 0,
+            _safe_int(record.metadata.get("row_chunk_index")) or 0,
+            record.id,
+        ),
+    )
+
+
+def _with_vector_rank(chunk: RetrievedChunk, vector_rank: int) -> RetrievedChunk:
+    return RetrievedChunk(
+        id=chunk.id,
+        document=chunk.document,
+        metadata=chunk.metadata,
+        distance=chunk.distance,
+        vector_rank=vector_rank,
+    )
 
 
 def _get_records_for_doc_id(collection: Any, doc_id: str) -> list[RetrievedChunk]:
@@ -388,6 +609,55 @@ def _get_records_for_doc_id(collection: Any, doc_id: str) -> list[RetrievedChunk
     return _dedupe_chunks(chunks)
 
 
+def _distance_guard_blocks(
+    candidates: Sequence[RetrievedChunk],
+    enabled: bool,
+    max_distance: float | None,
+) -> bool:
+    if not enabled or max_distance is None:
+        return False
+
+    numeric_distances = [
+        chunk.distance for chunk in candidates if isinstance(chunk.distance, (int, float))
+    ]
+    if not numeric_distances:
+        return False
+    return all(distance > max_distance for distance in numeric_distances)
+
+
+def _cap_candidates(
+    candidates: Sequence[RetrievedChunk],
+    *,
+    max_total_candidates: int,
+    initial_candidate_ids: Sequence[str],
+    query_hints: dict[str, bool],
+) -> list[RetrievedChunk]:
+    cap = max(1, int(max_total_candidates))
+    deduped = _dedupe_chunks(candidates)
+    if len(deduped) <= cap:
+        return deduped
+
+    initial_ids = set(initial_candidate_ids)
+    original_candidates = [chunk for chunk in deduped if chunk.id in initial_ids]
+    expansion_candidates = [chunk for chunk in deduped if chunk.id not in initial_ids]
+
+    if _should_boost_table_rows(query_hints):
+        expansion_candidates = sorted(
+            enumerate(expansion_candidates),
+            key=lambda item: (item[1].metadata.get("chunk_type") != "table_row", item[0]),
+        )
+        expansion_candidates = [chunk for _, chunk in expansion_candidates]
+
+    return (original_candidates + expansion_candidates)[:cap]
+
+
+def _should_boost_table_rows(query_hints: dict[str, bool]) -> bool:
+    return bool(
+        query_hints.get("asks_table_or_structured_info")
+        or query_hints.get("asks_number_or_money")
+    )
+
+
 def _rank_chunks(
     query: str,
     candidates: Sequence[RetrievedChunk],
@@ -395,10 +665,17 @@ def _rank_chunks(
     *,
     reranker_type: str,
     rerank_llm: Any | None,
+    query_hints: dict[str, bool] | None = None,
 ) -> list[RetrievedChunk]:
     original_order = list(candidates)
     if reranker_type.casefold() == "llm" and rerank_llm is not None:
-        ranked_ids = rerank_candidate_ids(query, original_order, final_n, rerank_llm)
+        ranked_ids = rerank_candidate_ids(
+            query,
+            original_order,
+            final_n,
+            rerank_llm,
+            query_hints=query_hints,
+        )
     else:
         ranked_ids = []
 

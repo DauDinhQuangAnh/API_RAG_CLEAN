@@ -46,6 +46,22 @@ Endpoint `/runtime-config` chi tra ve cau hinh runtime khong chua secret.
 - `POST /ingest`: ingest file tai lieu hoac bang du lieu.
 - `POST /collections/{collection_name}/query`: hoi dap RAG tren collection.
 
+## Phase 6 search quality
+
+He thong van chi co mot luong query chinh: `POST /collections/{collection_name}/query`.
+Phase 6 khong them search mode cho user, khong them tham so request, khong BM25,
+khong hybrid keyword search, va khong graph search.
+
+Pipeline query van dua tren vector search, sau do mo rong context co kiem soat bang
+metadata Phase 5/5.1 nhu `parent_id`, `section_path`, `table_index`, `page_number`,
+va reranker nhan metadata gon hon de uu tien evidence dung nguon, section, va table
+row khi cau hoi lien quan den bang, so lieu, chi phi, gia, doanh thu, hoac so sanh.
+
+Distance guard la tuy chon va mac dinh tat:
+
+- `RAG_ENABLE_DISTANCE_GUARD=false`
+- `RAG_MAX_DISTANCE` chi nen khai bao khi muon bat nguong distance cu the cho moi truong.
+
 ## File ho tro ingest
 
 - PDF

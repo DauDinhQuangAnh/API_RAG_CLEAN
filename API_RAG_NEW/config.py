@@ -32,6 +32,16 @@ def get_int_env(name: str, default: int) -> int:
         return default
 
 
+def get_optional_float_env(name: str) -> float | None:
+    raw_value = os.getenv(name)
+    if raw_value is None or not raw_value.strip():
+        return None
+    try:
+        return float(raw_value)
+    except (TypeError, ValueError):
+        return None
+
+
 def get_bool_env(name: str, default: bool) -> bool:
     raw_value = os.getenv(name)
     if raw_value is None:
@@ -59,6 +69,13 @@ RAG_INITIAL_TOP_K = get_int_env("RAG_INITIAL_TOP_K", 20)
 RAG_FINAL_TOP_N = get_int_env("RAG_FINAL_TOP_N", 6)
 RAG_INCLUDE_NEIGHBORS = get_bool_env("RAG_INCLUDE_NEIGHBORS", True)
 RAG_RERANKER_TYPE = os.getenv("RAG_RERANKER_TYPE", "llm")
+RAG_MAX_CONTEXT_EXPANSION_PER_CANDIDATE = max(
+    0,
+    get_int_env("RAG_MAX_CONTEXT_EXPANSION_PER_CANDIDATE", 3),
+)
+RAG_MAX_TOTAL_CANDIDATES = max(1, get_int_env("RAG_MAX_TOTAL_CANDIDATES", 40))
+RAG_ENABLE_DISTANCE_GUARD = get_bool_env("RAG_ENABLE_DISTANCE_GUARD", False)
+RAG_MAX_DISTANCE = get_optional_float_env("RAG_MAX_DISTANCE")
 RAG_CHUNKING_PROFILE = get_choice_env(
     "RAG_CHUNKING_PROFILE",
     "hybrid",

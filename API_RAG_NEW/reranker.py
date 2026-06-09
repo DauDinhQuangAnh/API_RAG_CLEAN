@@ -24,13 +24,16 @@ def rerank_candidate_ids(
     candidates: Sequence[RerankCandidate],
     final_n: int,
     llm: SupportsGenerateContent,
+    query_hints: dict[str, bool] | None = None,
 ) -> list[str]:
     original_ids = [candidate.id for candidate in candidates]
     if final_n <= 0 or not original_ids:
         return []
 
     try:
-        response = llm.generate_content(_build_rerank_prompt(query, candidates, final_n))
+        response = llm.generate_content(
+            _build_rerank_prompt(query, candidates, final_n, query_hints=query_hints)
+        )
         ranked_ids = _parse_ranked_ids(response)
     except Exception:
         ranked_ids = []
@@ -59,6 +62,8 @@ def _build_rerank_prompt(
     query: str,
     candidates: Sequence[RerankCandidate],
     final_n: int,
+    *,
+    query_hints: dict[str, bool] | None = None,
 ) -> str:
     payload = [
         {
@@ -68,11 +73,21 @@ def _build_rerank_prompt(
         }
         for candidate in candidates
     ]
+    hint_payload = {
+        key: bool(value) for key, value in (query_hints or {}).items() if value
+    }
     return (
-        "You are a retrieval reranker. Rank candidate IDs by relevance to the user "
-        "question. Do not answer the question. Do not add explanations. Return only "
-        'valid JSON in this exact shape: {"ranked_ids": ["id1", "id2"]}.\n\n'
+        "You are a retrieval reranker for a RAG system.\n"
+        "Task: Rank candidate IDs by usefulness for answering the user question.\n"
+        "Prefer exact, source-backed evidence from the provided candidates.\n"
+        "Prefer table_row chunks for questions about tables, criteria, pricing, "
+        "rows, numbers, fees, costs, revenue, comparison, or structured fields.\n"
+        "Prefer chunks with matching section_path or table_title when they clearly "
+        "match the user question.\n"
+        "Do not answer the question. Do not add explanations. Do not invent IDs.\n"
+        'Return only valid JSON in this exact shape: {"ranked_ids": ["id1", "id2"]}.\n\n'
         f"User question: {query}\n"
+        f"Internal query hints: {json.dumps(hint_payload, ensure_ascii=False)}\n"
         f"Return at most {final_n} IDs.\n"
         f"Candidates:\n{json.dumps(payload, ensure_ascii=False)}"
     )
@@ -87,6 +102,15 @@ def _compact_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         "page_chunk_index",
         "row_index",
         "row_chunk_index",
+        "chunk_type",
+        "section_title",
+        "section_path",
+        "block_index",
+        "parent_id",
+        "table_index",
+        "table_title",
+        "table_row_index",
+        "table_row_part_index",
     )
     return {key: metadata[key] for key in keys if key in metadata}
 

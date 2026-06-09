@@ -30,8 +30,12 @@ from API_RAG_NEW.config import (
     INGEST_BATCH_SIZE,
     RAG_FINAL_TOP_N,
     RAG_CHUNKING_PROFILE,
+    RAG_ENABLE_DISTANCE_GUARD,
     RAG_INCLUDE_NEIGHBORS,
     RAG_INITIAL_TOP_K,
+    RAG_MAX_CONTEXT_EXPANSION_PER_CANDIDATE,
+    RAG_MAX_DISTANCE,
+    RAG_MAX_TOTAL_CANDIDATES,
     RAG_RERANKER_TYPE,
     get_gemini_api_key,
 )
@@ -75,6 +79,12 @@ def runtime_config_payload() -> dict[str, object]:
         "rag_chunking_profile": RAG_CHUNKING_PROFILE,
         "rag_include_neighbors": RAG_INCLUDE_NEIGHBORS,
         "rag_reranker_type": RAG_RERANKER_TYPE,
+        "rag_max_context_expansion_per_candidate": (
+            RAG_MAX_CONTEXT_EXPANSION_PER_CANDIDATE
+        ),
+        "rag_max_total_candidates": RAG_MAX_TOTAL_CANDIDATES,
+        "rag_enable_distance_guard": RAG_ENABLE_DISTANCE_GUARD,
+        "rag_max_distance": RAG_MAX_DISTANCE,
         "gemini_model": GEMINI_MODEL,
         "embedding_model_name": ACTIVE_EMBEDDING_MODEL_NAME,
         "chroma_db_path": CHROMA_DB_PATH,
@@ -417,6 +427,12 @@ def query_collection(collection_name: str, req: QueryRequest) -> QueryResponse:
             include_neighbors=RAG_INCLUDE_NEIGHBORS,
             reranker_type=RAG_RERANKER_TYPE,
             rerank_llm=rerank_llm,
+            max_context_expansion_per_candidate=(
+                RAG_MAX_CONTEXT_EXPANSION_PER_CANDIDATE
+            ),
+            max_total_candidates=RAG_MAX_TOTAL_CANDIDATES,
+            enable_distance_guard=RAG_ENABLE_DISTANCE_GUARD,
+            max_distance=RAG_MAX_DISTANCE,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
