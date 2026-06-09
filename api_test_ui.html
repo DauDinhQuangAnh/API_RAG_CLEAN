@@ -747,7 +747,7 @@
           <div class="row">
             <label>
               File
-              <input id="uploadFile" type="file" accept=".docx,.pdf,.txt,.text,.csv,.xlsx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+              <input id="uploadFile" type="file" accept=".docx,.pdf,.txt,.text,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain">
             </label>
             <label>
               Collection
@@ -756,10 +756,6 @@
               </select>
             </label>
           </div>
-          <label class="compact">
-            Cot chunking cho CSV/XLSX
-            <input id="indexColumn" placeholder="Bat buoc khi upload CSV/XLSX" autocomplete="off">
-          </label>
           <div class="actions">
             <button id="ingestBtn" type="button">Upload va ingest</button>
             <button id="clearIngestBtn" type="button" class="secondary">Clear ingest</button>
@@ -892,7 +888,6 @@
       recordsOffset: document.getElementById("recordsOffset"),
       collectionsList: document.getElementById("collectionsList"),
       uploadFile: document.getElementById("uploadFile"),
-      indexColumn: document.getElementById("indexColumn"),
       ingestCollectionSelect: document.getElementById("ingestCollectionSelect"),
       ingestBusy: document.getElementById("ingestBusy"),
       ingestBusyText: document.getElementById("ingestBusyText"),
@@ -1416,7 +1411,6 @@
     function setIngestLoading(isLoading) {
       const controls = [
         elements.uploadFile,
-        elements.indexColumn,
         elements.ingestCollectionSelect,
         document.getElementById("ingestBtn"),
         document.getElementById("clearIngestBtn"),
@@ -1737,11 +1731,6 @@
         throw new Error("Chua chon file.");
       }
 
-      const extension = fileExtension(file.name);
-      if (["csv", "xlsx"].includes(extension) && !elements.indexColumn.value.trim()) {
-        throw new Error("CSV/XLSX can cot chunking.");
-      }
-
       return file;
     }
 
@@ -1896,11 +1885,6 @@
           const formData = new FormData();
           formData.append("file", file);
 
-          const indexColumn = elements.indexColumn.value.trim();
-          if (indexColumn) {
-            formData.append("index_column", indexColumn);
-          }
-
           const collectionName = selectedIngestCollection();
           if (collectionName) {
             formData.append("collection_name", collectionName);
@@ -1926,7 +1910,6 @@
 
     document.getElementById("clearIngestBtn").addEventListener("click", () => {
       resetUploadFileInput();
-      elements.indexColumn.value = "";
       elements.ingestCollectionSelect.value = selectedCollection() || "";
       setStatus("Da clear ingest form", true);
     });

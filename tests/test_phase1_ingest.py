@@ -3,8 +3,6 @@ from __future__ import annotations
 import os
 from datetime import date
 
-import pandas as pd
-
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
@@ -18,11 +16,6 @@ from API_RAG_NEW.rag_pipeline import (
 class IdentityChunker:
     def split_text(self, text: str) -> list[str]:
         return [text.strip()] if text.strip() else []
-
-
-class PipeChunker:
-    def split_text(self, text: str) -> list[str]:
-        return [chunk.strip() for chunk in text.split("||") if chunk.strip()]
 
 
 class FakeEmbeddingModel:
@@ -190,49 +183,32 @@ def test_pdf_record_builder_includes_page_metadata():
     assert records[0]["id"] != records[1]["id"]
 
 
-def test_tabular_record_builder_uses_one_based_row_and_chunk_metadata():
+def test_ingest_rejects_csv_file():
+    from fastapi import HTTPException
+
     from API_RAG_NEW import services
 
-    dataframe = pd.DataFrame(
-        {
-            "content": ["alpha || beta", "gamma"],
-            "note": ["first row", "second row"],
-            "id": ["row-id-should-not-win", "another-row-id"],
-            "_id": ["row-internal-id", "another-row-internal-id"],
-        }
-    )
-    file_hash = "b" * 64
+    try:
+        services.ingest_file_content("data.csv", b"content", "phase63-csv")
+    except HTTPException as exc:
+        assert exc.status_code == 400
+        assert exc.detail == "Only DOCX, PDF, TXT, and TEXT files are supported."
+    else:
+        raise AssertionError("CSV ingest should be rejected")
 
-    records = list(
-        services._iter_tabular_chunk_records(
-            dataframe,
-            "content",
-            "data.csv",
-            ".csv",
-            file_hash,
-            PipeChunker(),
-        )
-    )
 
-    assert [record["row_index"] for record in records] == [1, 1, 2]
-    assert [record["row_chunk_index"] for record in records] == [1, 2, 1]
-    assert [record["chunk_index"] for record in records] == [1, 2, 3]
-    assert records[0]["doc_id"] == stable_record_id(
-        "row", file_hash, 1, prefix="doc"
-    )
-    assert records[2]["doc_id"] == stable_record_id(
-        "row", file_hash, 2, prefix="doc"
-    )
-    assert records[0]["id"] == stable_record_id(
-        records[0]["doc_id"],
-        "data.csv",
-        "csv",
-        1,
-        1,
-        "alpha",
-    )
-    assert records[0]["note"] == "first row"
-    assert "_id" not in records[0]
+def test_ingest_rejects_xlsx_file():
+    from fastapi import HTTPException
+
+    from API_RAG_NEW import services
+
+    try:
+        services.ingest_file_content("data.xlsx", b"content", "phase63-xlsx")
+    except HTTPException as exc:
+        assert exc.status_code == 400
+        assert exc.detail == "Only DOCX, PDF, TXT, and TEXT files are supported."
+    else:
+        raise AssertionError("XLSX ingest should be rejected")
 
 
 def test_collection_records_response_includes_metadatas_and_documents(monkeypatch):

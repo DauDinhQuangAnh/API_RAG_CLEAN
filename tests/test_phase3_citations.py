@@ -75,8 +75,8 @@ def test_citation_builder_preserves_metadata_and_uses_short_preview():
                 "chunk": long_chunk,
             },
             {
-                "source": "data.xlsx",
-                "source_type": "xlsx",
+                "source": "legacy-row-document.txt",
+                "source_type": "txt",
                 "chunk_index": "12",
                 "row_index": "4",
                 "row_chunk_index": "2",
@@ -108,7 +108,7 @@ def test_citation_builder_preserves_metadata_and_uses_short_preview():
     assert citations[1].snippet == "row text"
 
 
-def test_retrieved_data_uses_markers_for_pdf_txt_and_tabular_chunks():
+def test_retrieved_data_uses_markers_for_pdf_txt_and_legacy_row_chunks():
     records = [
         {
             "id": "pdf",
@@ -133,11 +133,11 @@ def test_retrieved_data_uses_markers_for_pdf_txt_and_tabular_chunks():
             },
         },
         {
-            "id": "xlsx",
+            "id": "legacy-row",
             "document": "row chunk",
             "metadata": {
-                "source": "data.xlsx",
-                "source_type": "xlsx",
+                "source": "legacy-row-document.txt",
+                "source_type": "txt",
                 "row_index": 4,
                 "row_chunk_index": 1,
                 "chunk_index": 12,
@@ -158,7 +158,7 @@ def test_retrieved_data_uses_markers_for_pdf_txt_and_tabular_chunks():
 
     assert "[1] source=document.pdf | page=2 | chunk_index=5" in retrieved_data
     assert "[2] source=document.txt | page=N/A | chunk_index=1" in retrieved_data
-    assert "[3] source=data.xlsx | row=4 | chunk_index=12" in retrieved_data
+    assert "[3] source=legacy-row-document.txt | row=4 | chunk_index=12" in retrieved_data
     assert "chunk: pdf chunk" in retrieved_data
     assert "chunk: txt chunk" in retrieved_data
     assert "chunk: row chunk" in retrieved_data

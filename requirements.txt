@@ -5,8 +5,6 @@ uvicorn
 python-multipart
 google-genai
 numpy
-pandas
-openpyxl
 pdfplumber
 python-docx
 scikit-learn

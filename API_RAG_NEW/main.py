@@ -91,20 +91,15 @@ def delete_collection(collection_name: str) -> dict[str, str]:
 @app.post("/ingest", response_model=IngestResponse)
 async def ingest_file(
     file: UploadFile = File(...),
-    index_column: str | None = Form(
-        None,
-        description="CSV/XLSX column to index and chunk",
-    ),
     collection_name: str | None = Form(None),
 ) -> IngestResponse:
     raw_content = await file.read()
     if not raw_content:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
     return services.ingest_file_content(
-        file.filename or "upload.csv",
+        file.filename or "upload.txt",
         raw_content,
         collection_name,
-        index_column=index_column,
     )
 
 

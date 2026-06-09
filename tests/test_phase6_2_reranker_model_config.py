@@ -44,6 +44,7 @@ def response_fields(model_type: type[Any]) -> set[str]:
 
 def test_gemini_reranker_model_falls_back_to_gemini_model_when_unset(monkeypatch):
     import chromadb
+    import dotenv
     import download_model
     import API_RAG_NEW.config as config
 
@@ -51,6 +52,7 @@ def test_gemini_reranker_model_falls_back_to_gemini_model_when_unset(monkeypatch
         with monkeypatch.context() as isolated:
             isolated.setenv("GEMINI_MODEL", "main-model-for-test")
             isolated.delenv("GEMINI_RERANKER_MODEL", raising=False)
+            isolated.setattr(dotenv, "load_dotenv", lambda *args, **kwargs: None)
             isolated.setattr(chromadb, "PersistentClient", lambda path: object())
             isolated.setattr(
                 download_model,

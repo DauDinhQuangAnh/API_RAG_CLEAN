@@ -31,3 +31,14 @@ def test_local_ui_keeps_single_query_pipeline_without_search_mode_control():
     assert "search_mode" not in html
     assert "searchMode" not in html
     assert "hybrid search" not in html.casefold()
+
+
+def test_local_ui_no_longer_exposes_csv_xlsx_ingest_controls():
+    html = Path("api_test_ui.html").read_text(encoding="utf-8")
+
+    assert ".csv" not in html
+    assert ".xlsx" not in html
+    assert "text/csv" not in html
+    assert "spreadsheetml" not in html
+    assert "indexColumn" not in html
+    assert ("index" + "_column") not in html

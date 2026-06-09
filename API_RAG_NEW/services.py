@@ -9,7 +9,6 @@ import uuid
 from difflib import SequenceMatcher
 from typing import Any
 
-import pandas as pd
 from fastapi import HTTPException
 from docx import Document
 import pdfplumber
@@ -171,31 +170,16 @@ def delete_collection(collection_name: str) -> dict[str, str]:
     return {"detail": "Collection deleted successfully."}
 
 
-def ingest_csv_content(
-    file_name: str,
-    raw_content: bytes,
-    index_column: str,
-    requested_collection_name: str | None,
-) -> IngestResponse:
-    return ingest_file_content(
-        file_name,
-        raw_content,
-        requested_collection_name,
-        index_column=index_column,
-    )
-
-
 def ingest_file_content(
     file_name: str,
     raw_content: bytes,
     requested_collection_name: str | None,
-    index_column: str | None = None,
 ) -> IngestResponse:
     extension = os.path.splitext(file_name)[1].casefold()
-    if extension not in {".csv", ".xlsx", ".docx", ".pdf", ".txt", ".text"}:
+    if extension not in {".docx", ".pdf", ".txt", ".text"}:
         raise HTTPException(
             status_code=400,
-            detail="Only DOCX, PDF, TXT, TEXT, CSV, and XLSX files are supported.",
+            detail="Only DOCX, PDF, TXT, and TEXT files are supported.",
         )
 
     final_collection_name = _resolve_collection_name(file_name, requested_collection_name)
@@ -219,15 +203,14 @@ def ingest_file_content(
             raw_content,
             file_name,
             file_hash,
-            index_column,
             chunker,
             requested_profile,
         )
         _merge_chunk_stats(chunk_stats, build_stats)
-        if requested_profile == "hybrid" and extension not in {".csv", ".xlsx"}:
+        if requested_profile == "hybrid":
             records = list(records)
     except Exception as exc:
-        if requested_profile != "hybrid" or extension in {".csv", ".xlsx"}:
+        if requested_profile != "hybrid":
             raise
         warning = (
             "Hybrid chunking failed; fell back to semantic chunking: "
@@ -241,7 +224,6 @@ def ingest_file_content(
             raw_content,
             file_name,
             file_hash,
-            index_column,
             chunker,
             effective_profile,
         )
@@ -283,30 +265,9 @@ def _build_ingest_records(
     raw_content: bytes,
     file_name: str,
     file_hash: str,
-    index_column: str | None,
     chunker: ProtonxSemanticChunker,
     chunking_profile: str,
 ) -> tuple[int, Any, dict[str, Any]]:
-    if extension in {".csv", ".xlsx"}:
-        if not index_column:
-            raise HTTPException(
-                status_code=400,
-                detail="index_column is required for CSV/XLSX ingest.",
-            )
-        dataframe = _read_tabular_file(raw_content, extension, index_column)
-        return (
-            len(dataframe),
-            _iter_tabular_chunk_records(
-                dataframe,
-                index_column,
-                file_name,
-                extension,
-                file_hash,
-                chunker,
-            ),
-            {},
-        )
-
     if extension == ".pdf":
         if chunking_profile == "hybrid":
             pages_with_tables = _extract_pdf_pages_with_tables(raw_content)
@@ -539,32 +500,6 @@ def _content_hash(raw_content: bytes) -> str:
 
 def _document_id(file_hash: str) -> str:
     return f"doc_{file_hash[:32]}"
-
-
-def _read_tabular_file(
-    raw_content: bytes,
-    extension: str,
-    index_column: str,
-) -> pd.DataFrame:
-    file_type = extension.lstrip(".").upper()
-    try:
-        if extension == ".csv":
-            dataframe = pd.read_csv(io.BytesIO(raw_content))
-        else:
-            dataframe = pd.read_excel(io.BytesIO(raw_content))
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Failed to read {file_type}: {exc}",
-        ) from exc
-
-    if index_column not in dataframe.columns:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Column '{index_column}' not found in {file_type} file.",
-        )
-
-    return dataframe.copy()
 
 
 def _extract_non_pdf_document_text(
@@ -1132,74 +1067,3 @@ def _table_context_for_index(contexts: list[Any], table_index: int) -> Any | Non
     return contexts[-1]
 
 
-def _iter_tabular_chunk_records(
-    dataframe: pd.DataFrame,
-    index_column: str,
-    file_name: str,
-    extension: str,
-    file_hash: str,
-    chunker: ProtonxSemanticChunker,
-):
-    source_type = extension.lstrip(".")
-    reserved_metadata_keys = {
-        "id",
-        "_id",
-        "chunk",
-        "doc_id",
-        "source",
-        "source_type",
-        "chunk_index",
-        "row_index",
-        "row_chunk_index",
-        "page_number",
-        "page_chunk_index",
-    }
-    chunk_index = 0
-    for row_offset, row in dataframe.reset_index(drop=True).iterrows():
-        row_index = int(row_offset) + 1
-        row_data = {
-            key: _normalize_dataframe_value(value)
-            for key, value in row.to_dict().items()
-        }
-        text = row_data.get(index_column)
-        if not isinstance(text, str) or not text.strip():
-            continue
-
-        row_doc_id = stable_record_id("row", file_hash, row_index, prefix="doc")
-        row_chunk_index = 0
-        for chunk in chunker.split_text(text):
-            if not chunk.strip():
-                continue
-            chunk_index += 1
-            row_chunk_index += 1
-            yield {
-                "id": stable_record_id(
-                    row_doc_id,
-                    file_name,
-                    source_type,
-                    row_index,
-                    row_chunk_index,
-                    chunk,
-                ),
-                "chunk": chunk,
-                "doc_id": row_doc_id,
-                "source": file_name,
-                "source_type": source_type,
-                "chunk_index": chunk_index,
-                "row_index": row_index,
-                "row_chunk_index": row_chunk_index,
-                **{
-                    key: value
-                    for key, value in row_data.items()
-                    if key not in reserved_metadata_keys
-                },
-            }
-
-
-def _normalize_dataframe_value(value: Any) -> Any:
-    try:
-        if pd.isna(value):
-            return None
-    except (TypeError, ValueError):
-        pass
-    return value
