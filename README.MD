@@ -1,6 +1,6 @@
 # RAG API
 
-Tai lieu nay chi ghi cac thong tin can thiet de chay va test local. Khong commit file `.env`, API key, du lieu nguoi dung, file upload mau, log runtime, hoac noi dung collection len repo.
+Tai lieu nay chi ghi cac thong tin can thiet de chay local. Khong commit file `.env`, API key, du lieu nguoi dung, file upload mau, log runtime, hoac noi dung collection len repo.
 
 ## Chay local
 
@@ -46,22 +46,6 @@ Endpoint `/runtime-config` chi tra ve cau hinh runtime khong chua secret.
 - `POST /ingest`: ingest file tai lieu.
 - `POST /collections/{collection_name}/query`: hoi dap RAG tren collection.
 
-## Phase 6 search quality
-
-He thong van chi co mot luong query chinh: `POST /collections/{collection_name}/query`.
-Phase 6 khong them search mode cho user, khong them tham so request, khong BM25,
-khong hybrid keyword search, va khong graph search.
-
-Pipeline query van dua tren vector search, sau do mo rong context co kiem soat bang
-metadata Phase 5/5.1 nhu `parent_id`, `section_path`, `table_index`, `page_number`,
-va reranker nhan metadata gon hon de uu tien evidence dung nguon, section, va table
-row khi cau hoi lien quan den bang, so lieu, chi phi, gia, doanh thu, hoac so sanh.
-
-Distance guard la tuy chon va mac dinh tat:
-
-- `RAG_ENABLE_DISTANCE_GUARD=false`
-- `RAG_MAX_DISTANCE` chi nen khai bao khi muon bat nguong distance cu the cho moi truong.
-
 ## File ho tro ingest
 
 - PDF
@@ -84,23 +68,3 @@ curl -X POST http://127.0.0.1:8000/collections/rag_collection_demo/query ^
   -d "{\"query\": \"Tom tat tai lieu\", \"number_docs_retrieval\": 3}"
 ```
 
-## UI local
-
-Mo UI:
-
-- `http://127.0.0.1:8000/ui`
-- Hoac mo truc tiep file `api_test_ui.html` va giu Base URL la `http://127.0.0.1:8000`
-
-UI ho tro health check, runtime config, quan ly collection, ingest file, xem records/chunks, va query RAG.
-
-## Test
-
-```bash
-.\.venv\Scripts\python.exe -m pytest -q
-```
-
-Hoac neu dung Python portable:
-
-```bash
-.\python\python.exe -m pytest -q
-```

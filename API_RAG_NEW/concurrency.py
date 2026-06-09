@@ -93,22 +93,3 @@ def concurrency_status_payload() -> dict[str, object]:
         "query": _query_limiter.snapshot(),
         "llm": _llm_limiter.snapshot(),
     }
-
-
-def reset_limiters_for_tests(
-    *,
-    max_concurrent_queries: int | None = None,
-    max_concurrent_llm_calls: int | None = None,
-) -> None:
-    global _query_limiter, _llm_limiter
-
-    _query_limiter = SlotLimiter(
-        RAG_MAX_CONCURRENT_QUERIES
-        if max_concurrent_queries is None
-        else max_concurrent_queries
-    )
-    _llm_limiter = SlotLimiter(
-        RAG_MAX_CONCURRENT_LLM_CALLS
-        if max_concurrent_llm_calls is None
-        else max_concurrent_llm_calls
-    )

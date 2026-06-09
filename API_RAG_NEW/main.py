@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
 
 from API_RAG_NEW import services
 from API_RAG_NEW.concurrency import acquire_query_slot
@@ -45,14 +42,6 @@ def runtime_config() -> dict[str, object]:
 @app.get("/runtime-status", dependencies=[Depends(require_internal_api_key)])
 def runtime_status() -> dict[str, object]:
     return services.runtime_status_payload()
-
-
-@app.get("/ui", include_in_schema=False)
-def local_ui() -> FileResponse:
-    ui_path = Path(__file__).resolve().parent.parent / "api_test_ui.html"
-    if not ui_path.exists():
-        raise HTTPException(status_code=404, detail="api_test_ui.html not found")
-    return FileResponse(ui_path)
 
 
 @app.get("/collections", dependencies=[Depends(require_internal_api_key)])
