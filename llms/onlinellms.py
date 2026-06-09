@@ -4,6 +4,8 @@ import backoff
 from google import genai
 from google.genai import types
 
+from API_RAG_NEW.concurrency import acquire_llm_slot
+
 from .base import LLM
 
 
@@ -46,21 +48,22 @@ class OnlineLLMs(LLM):
             raise ValueError("Gemini client is not initialized.")
         try:
             messages = self.parse_message(messages)
-            response = self.client.models.generate_content(
-                model=self.model_version,
-                contents=[
-                    {"role": "user", "parts": system_prompt},
-                    {
-                        "role": "model",
-                        "parts": "I understand. I will strictly follow your instruction!",
-                    },
-                    *messages,
-                ],
-                config=types.GenerateContentConfig(
-                    max_output_tokens=max_tokens,
-                    temperature=temperature,
-                ),
-            )
+            with acquire_llm_slot():
+                response = self.client.models.generate_content(
+                    model=self.model_version,
+                    contents=[
+                        {"role": "user", "parts": system_prompt},
+                        {
+                            "role": "model",
+                            "parts": "I understand. I will strictly follow your instruction!",
+                        },
+                        *messages,
+                    ],
+                    config=types.GenerateContentConfig(
+                        max_output_tokens=max_tokens,
+                        temperature=temperature,
+                    ),
+                )
             return response.text
         except Exception as e:
             print(f"Error occurred: {e}, retrying...")
@@ -75,10 +78,11 @@ class OnlineLLMs(LLM):
         if self.name != GEMINI_PROVIDER:
             raise ValueError(f"Unknown model name: {self.name}")
 
-        response = self.client.models.generate_content(
-            model=self.model_version,
-            contents=prompt,
-        )
+        with acquire_llm_slot():
+            response = self.client.models.generate_content(
+                model=self.model_version,
+                contents=prompt,
+            )
         # New SDK exposes a helper that returns the concatenated text.
         content = response.text
         if not isinstance(content, str):

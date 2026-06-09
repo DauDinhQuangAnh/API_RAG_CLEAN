@@ -42,6 +42,13 @@ def get_optional_float_env(name: str) -> float | None:
         return None
 
 
+def get_float_env(name: str, default: float) -> float:
+    value = get_optional_float_env(name)
+    if value is None or value < 0:
+        return default
+    return value
+
+
 def get_bool_env(name: str, default: bool) -> bool:
     raw_value = os.getenv(name)
     if raw_value is None:
@@ -78,6 +85,20 @@ RAG_MAX_TOTAL_CANDIDATES = max(1, get_int_env("RAG_MAX_TOTAL_CANDIDATES", 40))
 RAG_ENABLE_DISTANCE_GUARD = get_bool_env("RAG_ENABLE_DISTANCE_GUARD", False)
 RAG_MAX_DISTANCE = get_optional_float_env("RAG_MAX_DISTANCE")
 RAG_INTERNAL_API_KEY = os.getenv("RAG_INTERNAL_API_KEY") or None
+RAG_MAX_CONCURRENT_QUERIES = max(1, get_int_env("RAG_MAX_CONCURRENT_QUERIES", 8))
+RAG_MAX_CONCURRENT_LLM_CALLS = max(1, get_int_env("RAG_MAX_CONCURRENT_LLM_CALLS", 3))
+RAG_QUERY_QUEUE_TIMEOUT_SECONDS = get_float_env(
+    "RAG_QUERY_QUEUE_TIMEOUT_SECONDS",
+    2.0,
+)
+RAG_LLM_QUEUE_TIMEOUT_SECONDS = get_float_env(
+    "RAG_LLM_QUEUE_TIMEOUT_SECONDS",
+    10.0,
+)
+RAG_ENABLE_FINAL_ANSWER_FALLBACK = get_bool_env(
+    "RAG_ENABLE_FINAL_ANSWER_FALLBACK",
+    True,
+)
 RAG_CHUNKING_PROFILE = get_choice_env(
     "RAG_CHUNKING_PROFILE",
     "hybrid",

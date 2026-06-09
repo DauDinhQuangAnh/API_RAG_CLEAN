@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from API_RAG_NEW import services
+from API_RAG_NEW.concurrency import acquire_query_slot
 from API_RAG_NEW.config import ALLOWED_ORIGINS, ROOT_PATH
 from API_RAG_NEW.security import require_internal_api_key
 from API_RAG_NEW.schemas import (
@@ -39,6 +40,11 @@ def health() -> dict[str, str]:
 @app.get("/runtime-config", dependencies=[Depends(require_internal_api_key)])
 def runtime_config() -> dict[str, object]:
     return services.runtime_config_payload()
+
+
+@app.get("/runtime-status", dependencies=[Depends(require_internal_api_key)])
+def runtime_status() -> dict[str, object]:
+    return services.runtime_status_payload()
 
 
 @app.get("/ui", include_in_schema=False)
@@ -130,4 +136,5 @@ async def ingest_file(
     dependencies=[Depends(require_internal_api_key)],
 )
 def query_collection(collection_name: str, req: QueryRequest) -> QueryResponse:
-    return services.query_collection(collection_name, req)
+    with acquire_query_slot():
+        return services.query_collection(collection_name, req)

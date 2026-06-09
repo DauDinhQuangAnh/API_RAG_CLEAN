@@ -28,18 +28,24 @@ from API_RAG_NEW.config import (
     GEMINI_PROVIDER,
     GEMINI_RERANKER_MODEL,
     INGEST_BATCH_SIZE,
+    RAG_ENABLE_FINAL_ANSWER_FALLBACK,
     RAG_FINAL_TOP_N,
     RAG_CHUNKING_PROFILE,
     RAG_ENABLE_DISTANCE_GUARD,
     RAG_INCLUDE_NEIGHBORS,
     RAG_INITIAL_TOP_K,
     RAG_INTERNAL_API_KEY,
+    RAG_LLM_QUEUE_TIMEOUT_SECONDS,
+    RAG_MAX_CONCURRENT_LLM_CALLS,
+    RAG_MAX_CONCURRENT_QUERIES,
     RAG_MAX_CONTEXT_EXPANSION_PER_CANDIDATE,
     RAG_MAX_DISTANCE,
     RAG_MAX_TOTAL_CANDIDATES,
+    RAG_QUERY_QUEUE_TIMEOUT_SECONDS,
     RAG_RERANKER_TYPE,
     get_gemini_api_key,
 )
+from API_RAG_NEW.concurrency import concurrency_status_payload
 from API_RAG_NEW.document_structure import (
     BLOCK_BULLET,
     BLOCK_PARAGRAPH,
@@ -69,6 +75,12 @@ from API_RAG_NEW.schemas import (
 )
 
 
+FINAL_ANSWER_FALLBACK_MESSAGE = (
+    "Hệ thống AI đang quá tải hoặc tạm thời không thể tạo câu trả lời. "
+    "Vui lòng thử lại sau ít phút."
+)
+
+
 def health_payload() -> dict[str, str]:
     return {"status": "ok"}
 
@@ -87,11 +99,27 @@ def runtime_config_payload() -> dict[str, object]:
         "rag_enable_distance_guard": RAG_ENABLE_DISTANCE_GUARD,
         "rag_max_distance": RAG_MAX_DISTANCE,
         "rag_internal_api_key_enabled": bool(RAG_INTERNAL_API_KEY),
+        "rag_max_concurrent_queries": RAG_MAX_CONCURRENT_QUERIES,
+        "rag_max_concurrent_llm_calls": RAG_MAX_CONCURRENT_LLM_CALLS,
+        "rag_query_queue_timeout_seconds": RAG_QUERY_QUEUE_TIMEOUT_SECONDS,
+        "rag_llm_queue_timeout_seconds": RAG_LLM_QUEUE_TIMEOUT_SECONDS,
+        "rag_enable_final_answer_fallback": RAG_ENABLE_FINAL_ANSWER_FALLBACK,
+        "concurrency": concurrency_status_payload(),
         "gemini_model": GEMINI_MODEL,
         "gemini_reranker_model": GEMINI_RERANKER_MODEL,
         "embedding_model_name": ACTIVE_EMBEDDING_MODEL_NAME,
         "chroma_db_path": CHROMA_DB_PATH,
         "cors_origins": ALLOWED_ORIGINS,
+    }
+
+
+def runtime_status_payload() -> dict[str, object]:
+    return {
+        "health": health_payload(),
+        "concurrency": concurrency_status_payload(),
+        "embedding_model_name": ACTIVE_EMBEDDING_MODEL_NAME,
+        "gemini_model": GEMINI_MODEL,
+        "gemini_reranker_model": GEMINI_RERANKER_MODEL,
     }
 
 
@@ -405,7 +433,13 @@ def query_collection(collection_name: str, req: QueryRequest) -> QueryResponse:
     citations = build_citations_from_metadatas(final_metadatas)
     full_prompt = _build_query_prompt(req.query, retrieved_data)
     answer_llm = _build_llm()
-    answer = answer_llm.generate_content(full_prompt)
+    try:
+        answer = answer_llm.generate_content(full_prompt)
+    except Exception as exc:
+        if not RAG_ENABLE_FINAL_ANSWER_FALLBACK:
+            raise
+        print(f"Final answer generation failed: {exc}")
+        answer = FINAL_ANSWER_FALLBACK_MESSAGE
     return QueryResponse(
         metadatas=metadatas,
         retrieved_data=retrieved_data,
