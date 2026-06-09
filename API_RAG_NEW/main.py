@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from API_RAG_NEW import services
 from API_RAG_NEW.config import ALLOWED_ORIGINS, ROOT_PATH
+from API_RAG_NEW.security import require_internal_api_key
 from API_RAG_NEW.schemas import (
     CollectionCreateRequest,
     CollectionInfo,
@@ -35,7 +36,7 @@ def health() -> dict[str, str]:
     return services.health_payload()
 
 
-@app.get("/runtime-config")
+@app.get("/runtime-config", dependencies=[Depends(require_internal_api_key)])
 def runtime_config() -> dict[str, object]:
     return services.runtime_config_payload()
 
@@ -48,17 +49,25 @@ def local_ui() -> FileResponse:
     return FileResponse(ui_path)
 
 
-@app.get("/collections")
+@app.get("/collections", dependencies=[Depends(require_internal_api_key)])
 def list_collections() -> dict[str, list[str]]:
     return services.list_collections()
 
 
-@app.post("/collections", response_model=CollectionInfo)
+@app.post(
+    "/collections",
+    response_model=CollectionInfo,
+    dependencies=[Depends(require_internal_api_key)],
+)
 def create_collection(req: CollectionCreateRequest) -> CollectionInfo:
     return services.create_collection(req)
 
 
-@app.get("/collections/{collection_name}", response_model=CollectionInfo)
+@app.get(
+    "/collections/{collection_name}",
+    response_model=CollectionInfo,
+    dependencies=[Depends(require_internal_api_key)],
+)
 def get_collection_info(collection_name: str) -> CollectionInfo:
     return services.get_collection_info(collection_name)
 
@@ -66,6 +75,7 @@ def get_collection_info(collection_name: str) -> CollectionInfo:
 @app.get(
     "/collections/{collection_name}/records",
     response_model=CollectionRecordsResponse,
+    dependencies=[Depends(require_internal_api_key)],
 )
 def get_collection_records(
     collection_name: str,
@@ -75,7 +85,11 @@ def get_collection_records(
     return services.get_collection_records(collection_name, limit, offset)
 
 
-@app.patch("/collections/{collection_name}", response_model=CollectionInfo)
+@app.patch(
+    "/collections/{collection_name}",
+    response_model=CollectionInfo,
+    dependencies=[Depends(require_internal_api_key)],
+)
 def update_collection(
     collection_name: str,
     req: CollectionUpdateRequest,
@@ -83,12 +97,19 @@ def update_collection(
     return services.update_collection(collection_name, req)
 
 
-@app.delete("/collections/{collection_name}")
+@app.delete(
+    "/collections/{collection_name}",
+    dependencies=[Depends(require_internal_api_key)],
+)
 def delete_collection(collection_name: str) -> dict[str, str]:
     return services.delete_collection(collection_name)
 
 
-@app.post("/ingest", response_model=IngestResponse)
+@app.post(
+    "/ingest",
+    response_model=IngestResponse,
+    dependencies=[Depends(require_internal_api_key)],
+)
 async def ingest_file(
     file: UploadFile = File(...),
     collection_name: str | None = Form(None),
@@ -103,6 +124,10 @@ async def ingest_file(
     )
 
 
-@app.post("/collections/{collection_name}/query", response_model=QueryResponse)
+@app.post(
+    "/collections/{collection_name}/query",
+    response_model=QueryResponse,
+    dependencies=[Depends(require_internal_api_key)],
+)
 def query_collection(collection_name: str, req: QueryRequest) -> QueryResponse:
     return services.query_collection(collection_name, req)
