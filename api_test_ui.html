@@ -408,6 +408,65 @@
       display: block;
     }
 
+    .query-result-panels {
+      display: grid;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .query-result-panel {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel-soft);
+      padding: 12px;
+    }
+
+    .query-result-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+
+    .query-result-head h3 {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    .query-result-head button {
+      min-height: 30px;
+      padding: 5px 8px;
+      font-size: 12px;
+    }
+
+    .query-answer-box,
+    .query-chunks-box {
+      min-height: 96px;
+      max-height: 280px;
+      overflow: auto;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--text);
+      padding: 10px;
+      font: inherit;
+    }
+
+    .query-answer-box.empty,
+    .query-chunks-box.empty {
+      color: var(--muted);
+    }
+
+    .query-chunks-box {
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 13px;
+    }
+
     .summary-title {
       margin-bottom: 8px;
       font-weight: 700;
@@ -753,6 +812,22 @@
           <h2>Ket qua</h2>
           <button id="copyOutputBtn" type="button" class="ghost">Copy output</button>
         </div>
+        <div id="queryResultPanels" class="query-result-panels">
+          <div class="query-result-panel">
+            <div class="query-result-head">
+              <h3>Cau tra loi</h3>
+              <button id="copyAnswerBtn" type="button" class="ghost">Copy answer</button>
+            </div>
+            <div id="queryAnswerBox" class="query-answer-box empty">Chua co cau tra loi.</div>
+          </div>
+          <div class="query-result-panel">
+            <div class="query-result-head">
+              <h3>Chunks dung de tra loi</h3>
+              <button id="copyChunksBtn" type="button" class="ghost">Copy chunks</button>
+            </div>
+            <pre id="queryChunksBox" class="query-chunks-box empty">Chua co retrieved chunks.</pre>
+          </div>
+        </div>
         <div class="mode-bar">
           <button id="modeRawBtn" type="button" class="secondary active">Raw</button>
           <button id="modeAnswerBtn" type="button" class="secondary">Answer</button>
@@ -807,6 +882,8 @@
       serverStateLabel: document.getElementById("serverStateLabel"),
       output: document.getElementById("output"),
       outputSummary: document.getElementById("outputSummary"),
+      queryAnswerBox: document.getElementById("queryAnswerBox"),
+      queryChunksBox: document.getElementById("queryChunksBox"),
       collectionSelect: document.getElementById("collectionSelect"),
       collectionName: document.getElementById("collectionName"),
       collectionDescription: document.getElementById("collectionDescription"),
@@ -1080,6 +1157,42 @@
       return payload[key] || "";
     }
 
+    function isQueryPayload(payload) {
+      return Boolean(
+        payload
+        && typeof payload === "object"
+        && !Array.isArray(payload)
+        && "answer" in payload
+        && "retrieved_data" in payload
+        && "metadatas" in payload
+      );
+    }
+
+    function setQueryBox(element, text, emptyText) {
+      const value = String(text || "").trim();
+      element.textContent = value || emptyText;
+      element.classList.toggle("empty", !value);
+    }
+
+    function renderQueryResultPanels(payload) {
+      if (!isQueryPayload(payload)) {
+        setQueryBox(elements.queryAnswerBox, "", "Chua co cau tra loi.");
+        setQueryBox(elements.queryChunksBox, "", "Chua co retrieved chunks.");
+        return;
+      }
+
+      setQueryBox(
+        elements.queryAnswerBox,
+        payload.answer,
+        "Model chua tra ve cau tra loi."
+      );
+      setQueryBox(
+        elements.queryChunksBox,
+        payload.retrieved_data,
+        "Khong co retrieved chunks cho cau hoi nay."
+      );
+    }
+
     function formatCitations(payload) {
       const citations = payload && Array.isArray(payload.citations)
         ? payload.citations
@@ -1171,6 +1284,7 @@
 
     function renderOutput() {
       const payload = state.lastPayload;
+      renderQueryResultPanels(payload);
       renderOutputSummary(payload);
       if (!payload) {
         elements.output.textContent = "San sang.";
@@ -1856,6 +1970,18 @@
     document.getElementById("copyOutputBtn").addEventListener("click", () => {
       runSilentAction("Copy output", async () => {
         await copyText(elements.output.textContent);
+      });
+    });
+
+    document.getElementById("copyAnswerBtn").addEventListener("click", () => {
+      runSilentAction("Copy answer", async () => {
+        await copyText(elements.queryAnswerBox.textContent);
+      });
+    });
+
+    document.getElementById("copyChunksBtn").addEventListener("click", () => {
+      runSilentAction("Copy chunks", async () => {
+        await copyText(elements.queryChunksBox.textContent);
       });
     });
 

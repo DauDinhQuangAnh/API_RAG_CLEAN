@@ -6,6 +6,11 @@ from pathlib import Path
 def test_local_ui_exposes_phase6_runtime_and_metadata_views():
     html = Path("api_test_ui.html").read_text(encoding="utf-8")
 
+    assert "queryAnswerBox" in html
+    assert "queryChunksBox" in html
+    assert "renderQueryResultPanels" in html
+    assert "copyAnswerBtn" in html
+    assert "copyChunksBtn" in html
     assert "modeMetadataBtn" in html
     assert "formatRetrievedMetadata" in html
     assert "finalRetrievedMetadatas" in html
