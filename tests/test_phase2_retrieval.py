@@ -321,7 +321,11 @@ def test_reranker_truncation_does_not_truncate_final_answer_chunks(monkeypatch):
             }
         ]
     )
-    rerank_and_answer_llm = FakeLLM('{"ranked_ids": ["a"]}')
+    rerank_llm = FakeLLM('{"ranked_ids": ["a"]}')
+    answer_llm = FakeLLM("final answer")
+
+    def build_llm(api_key=None, model_version=None):
+        return rerank_llm if model_version else answer_llm
 
     monkeypatch.setattr(services, "_get_collection_or_404", lambda name: collection)
     monkeypatch.setattr(services, "EMBEDDING_MODEL", FakeEmbeddingModel())
@@ -329,10 +333,13 @@ def test_reranker_truncation_does_not_truncate_final_answer_chunks(monkeypatch):
     monkeypatch.setattr(services, "RAG_INITIAL_TOP_K", 1)
     monkeypatch.setattr(services, "RAG_INCLUDE_NEIGHBORS", False)
     monkeypatch.setattr(services, "RAG_RERANKER_TYPE", "llm")
-    monkeypatch.setattr(services, "_build_llm", lambda: rerank_and_answer_llm)
+    monkeypatch.setattr(services, "GEMINI_RERANKER_MODEL", "reranker-model")
+    monkeypatch.setattr(services, "_build_llm", build_llm)
 
     response = services.query_collection("demo", QueryRequest(query="question"))
 
     assert long_text in response.retrieved_data
     assert long_text in response.full_prompt
-    assert long_text not in rerank_and_answer_llm.prompts[0]
+    assert response.answer == "final answer"
+    assert long_text not in rerank_llm.prompts[0]
+    assert long_text in answer_llm.prompts[0]

@@ -27,6 +27,7 @@ from API_RAG_NEW.config import (
     EMBEDDING_MODEL,
     GEMINI_MODEL,
     GEMINI_PROVIDER,
+    GEMINI_RERANKER_MODEL,
     INGEST_BATCH_SIZE,
     RAG_FINAL_TOP_N,
     RAG_CHUNKING_PROFILE,
@@ -86,6 +87,7 @@ def runtime_config_payload() -> dict[str, object]:
         "rag_enable_distance_guard": RAG_ENABLE_DISTANCE_GUARD,
         "rag_max_distance": RAG_MAX_DISTANCE,
         "gemini_model": GEMINI_MODEL,
+        "gemini_reranker_model": GEMINI_RERANKER_MODEL,
         "embedding_model_name": ACTIVE_EMBEDDING_MODEL_NAME,
         "chroma_db_path": CHROMA_DB_PATH,
         "cors_origins": ALLOWED_ORIGINS,
@@ -439,7 +441,7 @@ def query_collection(collection_name: str, req: QueryRequest) -> QueryResponse:
     final_metadatas = metadatas[0] if metadatas else []
     citations = build_citations_from_metadatas(final_metadatas)
     full_prompt = _build_query_prompt(req.query, retrieved_data)
-    answer_llm = rerank_llm or _build_llm()
+    answer_llm = _build_llm()
     answer = answer_llm.generate_content(full_prompt)
     return QueryResponse(
         metadatas=metadatas,
@@ -463,12 +465,15 @@ def _build_optional_rerank_llm() -> OnlineLLMs | None:
     if RAG_RERANKER_TYPE.casefold() != "llm":
         return None
     try:
-        return _build_llm()
+        return _build_llm(model_version=GEMINI_RERANKER_MODEL)
     except Exception:
         return None
 
 
-def _build_llm(api_key: str | None = None) -> OnlineLLMs:
+def _build_llm(
+    api_key: str | None = None,
+    model_version: str | None = None,
+) -> OnlineLLMs:
     resolved_api_key = api_key or get_gemini_api_key()
     if not resolved_api_key:
         raise HTTPException(status_code=400, detail="GEMINI_API_KEY not configured")
@@ -476,7 +481,7 @@ def _build_llm(api_key: str | None = None) -> OnlineLLMs:
     return OnlineLLMs(
         name=GEMINI_PROVIDER,
         api_key=resolved_api_key,
-        model_version=GEMINI_MODEL,
+        model_version=model_version or GEMINI_MODEL,
     )
 
 

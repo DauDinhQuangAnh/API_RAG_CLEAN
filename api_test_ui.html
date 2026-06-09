@@ -493,6 +493,13 @@
       margin-bottom: 10px;
     }
 
+    .modal-stats {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 10px;
+    }
+
     .modal-filters {
       display: grid;
       grid-template-columns: minmax(180px, 0.35fr) minmax(0, 1fr);
@@ -751,6 +758,7 @@
           <button id="modeAnswerBtn" type="button" class="secondary">Answer</button>
           <button id="modeCitationsBtn" type="button" class="secondary">Citations</button>
           <button id="modeRetrievedBtn" type="button" class="secondary">Retrieved</button>
+          <button id="modeMetadataBtn" type="button" class="secondary">Metadata</button>
           <button id="modePromptBtn" type="button" class="secondary">Prompt</button>
         </div>
         <div id="outputSummary" class="summary-panel"></div>
@@ -769,6 +777,7 @@
         <button id="closeRecordsModalBtn" type="button" class="ghost">Dong</button>
       </div>
       <div id="recordsModalMeta" class="modal-meta"></div>
+      <div id="recordsModalStats" class="modal-stats"></div>
       <div class="modal-filters">
         <label>
           Chunk Type
@@ -820,6 +829,7 @@
       recordsModal: document.getElementById("recordsModal"),
       recordsModalTitle: document.getElementById("recordsModalTitle"),
       recordsModalMeta: document.getElementById("recordsModalMeta"),
+      recordsModalStats: document.getElementById("recordsModalStats"),
       recordsModalBody: document.getElementById("recordsModalBody"),
       recordsChunkTypeFilter: document.getElementById("recordsChunkTypeFilter"),
       recordsSearchFilter: document.getElementById("recordsSearchFilter")
@@ -906,6 +916,11 @@
     function labelForKey(key) {
       const labels = {
         rag_chunking_profile: "Chunking Profile",
+        rag_include_neighbors: "Include Neighbors",
+        rag_max_context_expansion_per_candidate: "Expansion / Candidate",
+        rag_max_total_candidates: "Max Candidates",
+        rag_enable_distance_guard: "Distance Guard",
+        rag_max_distance: "Max Distance",
         chunking_profile: "Chunking Profile",
         collection_name: "Collection",
         total_chunks: "Total chunks",
@@ -925,8 +940,12 @@
         table_row_part_index: "Part",
         parent_id: "Parent ID",
         block_index: "Block",
+        source: "Source",
+        source_type: "Source Type",
+        doc_id: "Doc ID",
         page_number: "Page",
         row_index: "Row",
+        row_chunk_index: "Row Chunk",
         chunk_index: "Chunk",
         page_chunk_index: "Page Chunk",
         table_index: "Table Index"
@@ -936,6 +955,36 @@
 
     function summaryCard(label, value) {
       return `<div class="summary-card"><span>${escapeHtml(label)}</span><strong>${escapeHtml(displayValue(value))}</strong></div>`;
+    }
+
+    function finalRetrievedMetadatas(payload) {
+      if (!payload || !Array.isArray(payload.metadatas)) {
+        return [];
+      }
+      if (Array.isArray(payload.metadatas[0])) {
+        return payload.metadatas[0].filter((metadata) => metadata && typeof metadata === "object");
+      }
+      return payload.metadatas.filter((metadata) => metadata && typeof metadata === "object");
+    }
+
+    function uniqueValues(items, getter) {
+      return [...new Set(items.map(getter).filter((value) => value !== undefined && value !== null && value !== ""))];
+    }
+
+    function countBy(items, getter) {
+      return items.reduce((counts, item) => {
+        const key = getter(item) || "N/A";
+        counts[key] = (counts[key] || 0) + 1;
+        return counts;
+      }, {});
+    }
+
+    function formatCounts(counts) {
+      const entries = Object.entries(counts);
+      if (!entries.length) {
+        return "N/A";
+      }
+      return entries.map(([key, count]) => `${key}: ${count}`).join(", ");
     }
 
     function renderOutputSummary(payload) {
@@ -950,7 +999,12 @@
           summaryCard("Chunking Profile", payload.rag_chunking_profile),
           summaryCard("Initial top-k", payload.rag_initial_top_k),
           summaryCard("Final top-n", payload.rag_final_top_n),
+          summaryCard("Include Neighbors", payload.rag_include_neighbors),
           summaryCard("Reranker", payload.rag_reranker_type),
+          summaryCard("Expansion / Candidate", payload.rag_max_context_expansion_per_candidate),
+          summaryCard("Max Candidates", payload.rag_max_total_candidates),
+          summaryCard("Distance Guard", payload.rag_enable_distance_guard),
+          summaryCard("Max Distance", payload.rag_max_distance),
           summaryCard("Gemini model", payload.gemini_model),
           summaryCard("Embedding model", payload.embedding_model_name)
         ].join("");
@@ -994,6 +1048,28 @@
           warnings
         ].join("");
         elements.outputSummary.classList.add("active");
+        return;
+      }
+
+      if ("retrieved_data" in payload && "metadatas" in payload) {
+        const finalMetadatas = finalRetrievedMetadatas(payload);
+        const citations = Array.isArray(payload.citations) ? payload.citations : [];
+        const chunkTypes = countBy(finalMetadatas, (metadata) => metadata && metadata.chunk_type);
+        const sources = uniqueValues(finalMetadatas, (metadata) => metadata && metadata.source);
+        const sections = uniqueValues(finalMetadatas, (metadata) => metadata && (metadata.section_path || metadata.section_title));
+        const tableRows = finalMetadatas.filter((metadata) => metadata && metadata.chunk_type === "table_row").length;
+        const cards = [
+          summaryCard("Retrieved chunks", finalMetadatas.length),
+          summaryCard("Citations", citations.length),
+          summaryCard("Sources", sources.length),
+          summaryCard("Sections", sections.length),
+          summaryCard("Table rows", tableRows),
+          summaryCard("Answer chars", String(payload.answer || "").length),
+          summaryCard("Retrieved chars", String(payload.retrieved_data || "").length),
+          summaryCard("Chunk Types", formatCounts(chunkTypes))
+        ].join("");
+        elements.outputSummary.innerHTML = `<div class="summary-title">Query Result</div><div class="summary-grid">${cards}</div>`;
+        elements.outputSummary.classList.add("active");
       }
     }
 
@@ -1021,15 +1097,17 @@
           `source_type=${citation.source_type ?? "N/A"}`,
           location,
           `chunk_index=${citation.chunk_index ?? "N/A"}`,
+          `page_chunk_index=${citation.page_chunk_index ?? "N/A"}`,
+          `row_chunk_index=${citation.row_chunk_index ?? "N/A"}`,
           `doc_id=${citation.doc_id ?? "N/A"}`
         ];
         [
           ["chunk_type", "Chunk Type"],
           ["section_title", "Section"],
           ["section_path", "Section"],
+          ["table_index", "Table Index"],
           ["table_title", "Table"],
-          ["table_row_index", "Table Row"],
-          ["table_row_part_index", "Part"]
+          ["table_row_index", "Table Row"]
         ].forEach(([key, label]) => {
           if (citation[key] !== undefined && citation[key] !== null && citation[key] !== "") {
             metaParts.push(`${label}=${citation[key]}`);
@@ -1037,6 +1115,57 @@
         });
         const meta = metaParts.join(" | ");
         return `[${citation.id}] ${meta}\n${citation.snippet || ""}`;
+      }).join("\n\n");
+    }
+
+    function metadataLine(metadata, keys) {
+      return keys
+        .map((key) => {
+          const value = metadata && metadata[key];
+          if (value === undefined || value === null || value === "") {
+            return "";
+          }
+          return `${labelForKey(key)}=${value}`;
+        })
+        .filter(Boolean)
+        .join(" | ");
+    }
+
+    function formatRetrievedMetadata(payload) {
+      const metadatas = finalRetrievedMetadatas(payload);
+      if (!metadatas.length) {
+        return "Khong co retrieved metadata trong response.";
+      }
+
+      const locationKeys = [
+        "source",
+        "source_type",
+        "page_number",
+        "row_index",
+        "chunk_index",
+        "page_chunk_index",
+        "row_chunk_index",
+        "doc_id"
+      ];
+      const phaseKeys = [
+        "chunk_type",
+        "section_title",
+        "section_path",
+        "block_index",
+        "parent_id",
+        "table_index",
+        "table_title",
+        "table_row_index",
+        "table_row_part_index"
+      ];
+
+      return metadatas.map((metadata, index) => {
+        const lines = [
+          `[${index + 1}] ${metadataLine(metadata, locationKeys)}`,
+          metadataLine(metadata, phaseKeys),
+          `snippet=${String(metadata.chunk || "").slice(0, 320)}`
+        ].filter(Boolean);
+        return lines.join("\n");
       }).join("\n\n");
     }
 
@@ -1060,6 +1189,11 @@
 
       if (state.outputMode === "retrieved") {
         elements.output.textContent = valueFromPayload(payload, "retrieved_data") || formatData(payload);
+        return;
+      }
+
+      if (state.outputMode === "metadata") {
+        elements.output.textContent = formatRetrievedMetadata(payload);
         return;
       }
 
@@ -1362,6 +1496,24 @@
       return haystack.includes(search);
     }
 
+    function renderRecordsStats(metadatas, visibleIndexes) {
+      const visibleMetadatas = visibleIndexes
+        .map((index) => metadatas[index])
+        .filter((metadata) => metadata && typeof metadata === "object");
+      const chunkTypes = countBy(visibleMetadatas, (metadata) => metadata.chunk_type || "semantic");
+      const sources = uniqueValues(visibleMetadatas, (metadata) => metadata.source);
+      const sections = uniqueValues(visibleMetadatas, (metadata) => metadata.section_path || metadata.section_title);
+      const tableRows = visibleMetadatas.filter((metadata) => metadata.chunk_type === "table_row").length;
+      const tableTitles = uniqueValues(visibleMetadatas, (metadata) => metadata.table_title);
+      elements.recordsModalStats.innerHTML = [
+        metadataBadge("Types", formatCounts(chunkTypes)),
+        metadataBadge("Sources", sources.length),
+        metadataBadge("Sections", sections.length),
+        metadataBadge("Tables", tableTitles.length),
+        metadataBadge("Table Rows", tableRows)
+      ].filter(Boolean).join("");
+    }
+
     function renderRecordsModal(payload, resetFilters = true) {
       state.recordsPayload = payload;
       if (resetFilters) {
@@ -1379,6 +1531,7 @@
         .filter(({ metadata, index }) => recordMatchesFilters(metadata, ids[index] || "", documents[index]))
         .map(({ index }) => index);
       elements.recordsModalMeta.textContent = `Dang hien thi ${visibleIndexes.length}/${total} chunks`;
+      renderRecordsStats(metadatas, visibleIndexes);
       elements.recordsModalBody.innerHTML = "";
 
       if (!metadatas.length) {
@@ -1429,6 +1582,8 @@
         const badges = document.createElement("div");
         badges.className = "badge-list";
         badges.innerHTML = [
+          metadataBadge("Source Type", metadata && metadata.source_type),
+          metadataBadge("Doc ID", metadata && metadata.doc_id),
           metadataBadge("Chunk Type", metadata && metadata.chunk_type),
           metadataBadge("Page", metadata && metadata.page_number),
           metadataBadge("Row", metadata && metadata.row_index),
@@ -1714,6 +1869,7 @@
     document.getElementById("modeAnswerBtn").addEventListener("click", () => setOutputMode("answer"));
     document.getElementById("modeCitationsBtn").addEventListener("click", () => setOutputMode("citations"));
     document.getElementById("modeRetrievedBtn").addEventListener("click", () => setOutputMode("retrieved"));
+    document.getElementById("modeMetadataBtn").addEventListener("click", () => setOutputMode("metadata"));
     document.getElementById("modePromptBtn").addEventListener("click", () => setOutputMode("prompt"));
 
     document.getElementById("closeRecordsModalBtn").addEventListener("click", closeRecordsModal);
