@@ -42,7 +42,6 @@ class CollectionRecordsResponse(BaseModel):
 
 class QueryRequest(BaseModel):
     query: str
-    columns_to_answer: list[str] = Field(default_factory=list)
     number_docs_retrieval: int = Field(default=3, ge=1, le=50)
 
 

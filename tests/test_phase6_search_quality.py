@@ -170,7 +170,6 @@ def test_context_expansion_still_includes_chunk_index_neighbors():
         FakeEmbeddingModel(),
         "question",
         collection,
-        [],
         3,
         initial_top_k=1,
         include_neighbors=True,
@@ -192,7 +191,6 @@ def test_context_expansion_can_include_same_parent_id_chunks():
         FakeEmbeddingModel(),
         "question",
         collection,
-        [],
         2,
         initial_top_k=1,
         include_neighbors=True,
@@ -214,7 +212,6 @@ def test_context_expansion_can_include_same_section_path_chunks():
         FakeEmbeddingModel(),
         "question",
         collection,
-        [],
         2,
         initial_top_k=1,
         include_neighbors=True,
@@ -246,7 +243,6 @@ def test_table_query_hint_prioritizes_table_rows_within_expansion_cap():
         FakeEmbeddingModel(),
         "gia trong bang la bao nhieu",
         collection,
-        [],
         1,
         initial_top_k=1,
         include_neighbors=True,
@@ -278,7 +274,6 @@ def test_total_candidates_are_capped_before_final_selection():
         FakeEmbeddingModel(),
         "question",
         collection,
-        [],
         10,
         initial_top_k=1,
         include_neighbors=True,
@@ -298,7 +293,6 @@ def test_distance_guard_is_disabled_by_default_even_with_weak_distances():
         FakeEmbeddingModel(),
         "question",
         collection,
-        [],
         1,
         initial_top_k=1,
         max_distance=1.0,
@@ -320,7 +314,6 @@ def test_distance_guard_can_return_no_chunks_when_all_distances_are_weak():
         FakeEmbeddingModel(),
         "question",
         collection,
-        [],
         2,
         initial_top_k=2,
         enable_distance_guard=True,
@@ -342,7 +335,6 @@ def test_query_hints_detect_vietnamese_and_english_keywords():
 def test_query_request_response_and_citation_fields_remain_compatible():
     assert response_fields(QueryRequest) == {
         "query",
-        "columns_to_answer",
         "number_docs_retrieval",
     }
     assert response_fields(QueryResponse) == {

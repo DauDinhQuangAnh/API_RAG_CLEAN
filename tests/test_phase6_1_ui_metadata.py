@@ -42,3 +42,5 @@ def test_local_ui_no_longer_exposes_csv_xlsx_ingest_controls():
     assert "spreadsheetml" not in html
     assert "indexColumn" not in html
     assert ("index" + "_column") not in html
+    assert "columnsToAnswer" not in html
+    assert ("columns" + "_to_answer") not in html

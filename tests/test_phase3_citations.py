@@ -150,7 +150,6 @@ def test_retrieved_data_uses_markers_for_pdf_txt_and_legacy_row_chunks():
         FakeEmbeddingModel(),
         "question",
         FakeCollection(records),
-        [],
         3,
         initial_top_k=3,
     )

@@ -414,7 +414,6 @@ def query_collection(collection_name: str, req: QueryRequest) -> QueryResponse:
             EMBEDDING_MODEL,
             req.query,
             collection,
-            req.columns_to_answer,
             final_n,
             initial_top_k=RAG_INITIAL_TOP_K,
             include_neighbors=RAG_INCLUDE_NEIGHBORS,

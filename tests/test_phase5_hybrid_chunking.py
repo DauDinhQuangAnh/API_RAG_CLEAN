@@ -471,8 +471,7 @@ def test_retrieved_data_adds_phase5_metadata_without_losing_markers():
                 "chunk_index": 8,
                 "chunk": "table row chunk",
             }
-        ],
-        [],
+        ]
     )
 
     assert "[1] source=document.pdf | page=4 | chunk_index=8" in retrieved_data

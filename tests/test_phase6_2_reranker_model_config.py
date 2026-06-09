@@ -183,7 +183,6 @@ def test_query_collection_uses_main_model_for_final_answer_not_reranker(monkeypa
 def test_query_request_response_and_citation_schemas_remain_compatible():
     assert response_fields(QueryRequest) == {
         "query",
-        "columns_to_answer",
         "number_docs_retrieval",
     }
     assert response_fields(QueryResponse) == {

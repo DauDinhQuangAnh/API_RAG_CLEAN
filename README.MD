@@ -43,7 +43,7 @@ Endpoint `/runtime-config` chi tra ve cau hinh runtime khong chua secret.
 - `PATCH /collections/{collection_name}`: cap nhat thong tin collection.
 - `DELETE /collections/{collection_name}`: xoa collection.
 - `GET /collections/{collection_name}/records`: xem records trong collection.
-- `POST /ingest`: ingest file tai lieu hoac bang du lieu.
+- `POST /ingest`: ingest file tai lieu.
 - `POST /collections/{collection_name}/query`: hoi dap RAG tren collection.
 
 ## Phase 6 search quality
@@ -67,10 +67,6 @@ Distance guard la tuy chon va mac dinh tat:
 - PDF
 - DOCX
 - TXT/TEXT
-- CSV
-- XLSX
-
-CSV/XLSX can truyen `index_column` de chon cot dung cho chunking.
 
 Vi du ingest:
 

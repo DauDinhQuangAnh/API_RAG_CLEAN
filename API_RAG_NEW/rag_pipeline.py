@@ -101,66 +101,8 @@ def clean_collection_name(name: str) -> str | None:
     return cleaned_name[:63] if 3 <= len(cleaned_name) <= 63 else None
 
 
-def format_retrieved_data(
-    metadatas: list[dict[str, Any]], columns_to_answer: Sequence[str]
-) -> str:
-    lines: list[str] = []
-    available_columns: set[str] = set()
-    normalized_metadatas: list[dict[str, Any]] = []
-
-    for metadata in metadatas:
-        normalized_metadata = {}
-        if isinstance(metadata, dict):
-            normalized_metadata = {
-                str(key).casefold(): value for key, value in metadata.items()
-            }
-            available_columns.update(normalized_metadata.keys())
-        normalized_metadatas.append(normalized_metadata)
-
-    if columns_to_answer:
-        selected_columns = list(columns_to_answer)
-    else:
-        default_columns = ["chunk", "source", "source_type", "chunk_index"]
-        selected_columns = [
-            column for column in default_columns if column.casefold() in available_columns
-        ]
-        if not selected_columns:
-            selected_columns = sorted(available_columns)
-
-    normalized_columns = [
-        (str(column), str(column).casefold()) for column in selected_columns
-    ]
-    missing_columns = [
-        column
-        for column, normalized_column in normalized_columns
-        if normalized_column not in available_columns
-    ]
-    if missing_columns:
-        missing_list = ", ".join(missing_columns)
-        raise ValueError(
-            f"Requested columns not found in collection metadata: {missing_list}"
-        )
-
-    for index, normalized_metadata in enumerate(normalized_metadatas, start=1):
-        columns = [
-            f"{column}: {normalized_metadata.get(normalized_column)}"
-            for column, normalized_column in normalized_columns
-            if normalized_column in normalized_metadata
-        ]
-        line = f"{index}) {' '.join(columns)}".rstrip()
-        lines.append(line)
-
-    return "\n".join(lines)
-
-
-def format_retrieved_data_with_markers(
-    metadatas: list[dict[str, Any]], columns_to_answer: Sequence[str]
-) -> str:
+def format_retrieved_data_with_markers(metadatas: list[dict[str, Any]]) -> str:
     normalized_metadatas = _normalize_metadatas_for_display(metadatas)
-    selected_columns = _resolve_selected_columns(
-        normalized_metadatas,
-        columns_to_answer,
-    )
 
     blocks: list[str] = []
     for index, normalized_metadata in enumerate(normalized_metadatas, start=1):
@@ -194,13 +136,6 @@ def format_retrieved_data_with_markers(
         body_lines = [
             f"chunk: {_display_value(normalized_metadata.get('chunk'))}",
         ]
-        if columns_to_answer:
-            for column, normalized_column in selected_columns:
-                if normalized_column == "chunk":
-                    continue
-                body_lines.append(
-                    f"{column}: {_display_value(normalized_metadata.get(normalized_column))}"
-                )
         blocks.append(
             f"{header} | {' | '.join(header_parts)}\n" + "\n".join(body_lines)
         )
@@ -212,7 +147,6 @@ def vector_search(
     model: Any,
     query: str,
     collection: Any,
-    columns_to_answer: Sequence[str],
     number_docs_retrieval: int,
     *,
     initial_top_k: int | None = None,
@@ -263,10 +197,7 @@ def vector_search(
         query_hints=query_hints,
     )
     final_metadatas = [chunk.metadata for chunk in ranked_chunks]
-    return [final_metadatas], format_retrieved_data_with_markers(
-        final_metadatas,
-        columns_to_answer,
-    )
+    return [final_metadatas], format_retrieved_data_with_markers(final_metadatas)
 
 
 def detect_query_hints(query: str) -> dict[str, bool]:
@@ -361,34 +292,6 @@ def _normalize_metadatas_for_display(
             }
         normalized_metadatas.append(normalized_metadata)
     return normalized_metadatas
-
-
-def _resolve_selected_columns(
-    normalized_metadatas: list[dict[str, Any]],
-    columns_to_answer: Sequence[str],
-) -> list[tuple[str, str]]:
-    available_columns = {
-        column
-        for normalized_metadata in normalized_metadatas
-        for column in normalized_metadata
-    }
-    if not columns_to_answer:
-        return []
-
-    selected_columns = [
-        (str(column), str(column).casefold()) for column in columns_to_answer
-    ]
-    missing_columns = [
-        column
-        for column, normalized_column in selected_columns
-        if normalized_column not in available_columns
-    ]
-    if missing_columns:
-        missing_list = ", ".join(missing_columns)
-        raise ValueError(
-            f"Requested columns not found in collection metadata: {missing_list}"
-        )
-    return selected_columns
 
 
 def _location_part(normalized_metadata: dict[str, Any]) -> str:
