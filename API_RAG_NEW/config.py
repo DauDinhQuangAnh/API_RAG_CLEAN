@@ -95,7 +95,7 @@ ROOT_PATH = os.getenv("ROOT_PATH", "").strip()
 ALLOWED_ORIGINS = parse_cors_origins(os.getenv("RAG_CORS_ORIGINS"))
 CHROMA_DB_PATH = os.getenv("CHROMA_DB_PATH", "db")
 CHROMA_DB_PATH_LOCAL = os.getenv("CHROMA_DB_PATH_LOCAL", CHROMA_DB_PATH)
-CHROMA_DB_PATH_GEMINI = os.getenv("CHROMA_DB_PATH_GEMINI", "db_gemini")
+CHROMA_DB_PATH_GEMINI = os.getenv("CHROMA_DB_PATH_GEMINI", CHROMA_DB_PATH)
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 GEMINI_RERANKER_MODEL = os.getenv("GEMINI_RERANKER_MODEL") or GEMINI_MODEL
 RAG_INITIAL_TOP_K = get_int_env("RAG_INITIAL_TOP_K", 20)
@@ -193,6 +193,13 @@ def build_embedding_provider(provider: EmbeddingProviderName | None = None):
 
 _LOCAL_RUNTIME: EmbeddingRuntime | None = None
 _GEMINI_RUNTIME: EmbeddingRuntime | None = None
+_CHROMA_CLIENTS: dict[str, chromadb.PersistentClient] = {}
+
+
+def _get_chroma_client(db_path: str) -> chromadb.PersistentClient:
+    if db_path not in _CHROMA_CLIENTS:
+        _CHROMA_CLIENTS[db_path] = chromadb.PersistentClient(db_path)
+    return _CHROMA_CLIENTS[db_path]
 
 
 def get_embedding_runtime(provider: EmbeddingProviderName) -> EmbeddingRuntime:
@@ -206,7 +213,7 @@ def get_embedding_runtime(provider: EmbeddingProviderName) -> EmbeddingRuntime:
                 model_name=embedding_model.model_name,
                 dimension=int(embedding_model.dimension),
                 embedding_model=embedding_model,
-                chroma_client=chromadb.PersistentClient(CHROMA_DB_PATH_LOCAL),
+                chroma_client=_get_chroma_client(CHROMA_DB_PATH_LOCAL),
                 chroma_db_path=CHROMA_DB_PATH_LOCAL,
             )
         return _LOCAL_RUNTIME
@@ -219,7 +226,7 @@ def get_embedding_runtime(provider: EmbeddingProviderName) -> EmbeddingRuntime:
                 model_name=embedding_model.model_name,
                 dimension=int(embedding_model.dimension),
                 embedding_model=embedding_model,
-                chroma_client=chromadb.PersistentClient(CHROMA_DB_PATH_GEMINI),
+                chroma_client=_get_chroma_client(CHROMA_DB_PATH_GEMINI),
                 chroma_db_path=CHROMA_DB_PATH_GEMINI,
             )
         return _GEMINI_RUNTIME

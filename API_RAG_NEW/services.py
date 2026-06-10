@@ -211,7 +211,13 @@ def runtime_status_payload() -> dict[str, object]:
 def list_collections(provider: str = LOCAL_EMBEDDING_PROVIDER) -> dict[str, list[str]]:
     runtime = _runtime_for_provider(provider)
     collections = runtime.chroma_client.list_collections()
-    return {"collections": [collection.name for collection in collections]}
+    return {
+        "collections": [
+            collection.name
+            for collection in collections
+            if _collection_matches_runtime_metadata(runtime, collection)
+        ]
+    }
 
 
 def create_collection(
@@ -334,8 +340,9 @@ def _embedding_collection_metadata(
         "embedding_provider": runtime.provider,
         "embedding_model": runtime.model_name,
         "embedding_dimension": int(runtime.dimension),
-        "chunking_profile": chunking_profile or RAG_CHUNKING_PROFILE,
     }
+    if chunking_profile:
+        metadata["chunking_profile"] = chunking_profile
     if description:
         metadata["description"] = description
     return metadata
@@ -385,14 +392,15 @@ def _validate_collection_embedding_metadata(
     runtime: EmbeddingRuntime,
     collection: Any,
 ) -> None:
+    if _collection_matches_runtime_metadata(runtime, collection):
+        return
+
     metadata = collection.metadata or {}
     provider = metadata.get("embedding_provider")
     model = metadata.get("embedding_model")
     dimension = metadata.get("embedding_dimension")
 
     if provider is None and model is None and dimension is None:
-        if runtime.provider == LOCAL_EMBEDDING_PROVIDER:
-            return
         raise HTTPException(
             status_code=400,
             detail=(
@@ -401,19 +409,31 @@ def _validate_collection_embedding_metadata(
             ),
         )
 
-    if (
-        str(provider) == runtime.provider
-        and str(model) == runtime.model_name
-        and _metadata_dimension(dimension) == int(runtime.dimension)
-    ):
-        return
-
     raise HTTPException(
         status_code=400,
         detail=(
             "Collection was created with a different embedding provider/model. "
             "Please create a new collection or re-ingest documents."
         ),
+    )
+
+
+def _collection_matches_runtime_metadata(
+    runtime: EmbeddingRuntime,
+    collection: Any,
+) -> bool:
+    metadata = collection.metadata or {}
+    provider = metadata.get("embedding_provider")
+    model = metadata.get("embedding_model")
+    dimension = metadata.get("embedding_dimension")
+
+    if provider is None and model is None and dimension is None:
+        return runtime.provider == LOCAL_EMBEDDING_PROVIDER
+
+    return (
+        str(provider) == runtime.provider
+        and str(model) == runtime.model_name
+        and _metadata_dimension(dimension) == int(runtime.dimension)
     )
 
 
@@ -434,6 +454,16 @@ def _validate_collection_chunking_profile(
             "Please create a new collection or re-ingest documents."
         ),
     )
+
+
+def _set_collection_chunking_profile(
+    collection: Any,
+    runtime: EmbeddingRuntime,
+    final_profile: str,
+) -> None:
+    merged_metadata = dict(collection.metadata or {})
+    merged_metadata.update(_embedding_collection_metadata(runtime, None, final_profile))
+    collection.modify(metadata=merged_metadata)
 
 
 def _metadata_dimension(value: Any) -> int | None:
@@ -467,14 +497,12 @@ def ingest_file_content(
     if final_collection_name in existing_names:
         collection = _get_collection_or_404(runtime, final_collection_name)
         _validate_collection_embedding_metadata(runtime, collection)
-        _validate_collection_chunking_profile(collection, effective_chunking_profile)
     else:
         collection = runtime.chroma_client.get_or_create_collection(
             name=final_collection_name,
             metadata=_embedding_collection_metadata(
                 runtime,
                 DEFAULT_COLLECTION_DESCRIPTION,
-                effective_chunking_profile,
             ),
         )
 
@@ -518,6 +546,8 @@ def ingest_file_content(
         )
         _merge_chunk_stats(chunk_stats, build_stats)
 
+    _validate_collection_chunking_profile(collection, effective_profile)
+
     for record in records:
         _update_chunk_stats(chunk_stats, record)
         pending_records.append(record)
@@ -538,6 +568,8 @@ def ingest_file_content(
 
     if chunk_count == 0:
         raise HTTPException(status_code=400, detail="No valid text to chunk.")
+
+    _set_collection_chunking_profile(collection, runtime, effective_profile)
 
     return IngestResponse(
         collection_name=final_collection_name,

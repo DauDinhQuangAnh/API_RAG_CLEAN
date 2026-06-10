@@ -436,7 +436,6 @@ def test_create_collection_writes_embedding_metadata(monkeypatch):
         "embedding_provider": "local_sbert",
         "embedding_model": "fake-local",
         "embedding_dimension": 384,
-        "chunking_profile": "hybrid",
     }
 
 

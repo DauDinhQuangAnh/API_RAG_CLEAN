@@ -18,9 +18,21 @@ class FakeCollection:
     def __init__(self, name="demo", metadata=None):
         self.name = name
         self.metadata = metadata
+        self.upserts = []
+        self.modify_calls = []
 
     def count(self):
         return 0
+
+    def modify(self, name=None, metadata=None):
+        self.modify_calls.append({"name": name, "metadata": metadata})
+        if name:
+            self.name = name
+        if metadata is not None:
+            self.metadata = metadata
+
+    def upsert(self, **kwargs):
+        self.upserts.append(kwargs)
 
 
 class FakeChromaClient:
@@ -57,7 +69,7 @@ class FakeRuntime:
         self.dimension = 768
         self.embedding_model = object()
         self.chroma_client = chroma_client or FakeChromaClient()
-        self.chroma_db_path = "db_gemini" if provider == "gemini" else "db"
+        self.chroma_db_path = "db"
 
 
 def _client():
@@ -245,13 +257,14 @@ def test_gemini_routes_fail_without_key_but_local_routes_work(monkeypatch):
     assert "GEMINI_API_KEY" in gemini_response.json()["detail"]
 
 
-def test_same_collection_name_is_separate_by_provider(monkeypatch):
+def test_same_collection_name_is_unique_in_shared_db(monkeypatch):
     from API_RAG_NEW import services
     from API_RAG_NEW.schemas import CollectionCreateRequest
 
+    shared_client = FakeChromaClient()
     runtimes = {
-        "local_sbert": FakeRuntime("local_sbert"),
-        "gemini": FakeRuntime("gemini"),
+        "local_sbert": FakeRuntime("local_sbert", chroma_client=shared_client),
+        "gemini": FakeRuntime("gemini", chroma_client=shared_client),
     }
     monkeypatch.setattr(services, "get_embedding_runtime", lambda provider: runtimes[provider])
 
@@ -259,25 +272,62 @@ def test_same_collection_name_is_separate_by_provider(monkeypatch):
         CollectionCreateRequest(name="shared"),
         provider="local_sbert",
     )
-    gemini_info = services.create_collection(
-        CollectionCreateRequest(name="shared"),
-        provider="gemini",
-    )
 
     assert local_info.name == "shared"
-    assert gemini_info.name == "shared"
     assert (
-        runtimes["local_sbert"].chroma_client.get_collection("shared").metadata[
+        shared_client.get_collection("shared").metadata[
             "embedding_provider"
         ]
         == "local_sbert"
     )
-    assert (
-        runtimes["gemini"].chroma_client.get_collection("shared").metadata[
-            "embedding_provider"
-        ]
-        == "gemini"
+    try:
+        services.create_collection(
+            CollectionCreateRequest(name="shared"),
+            provider="gemini",
+        )
+    except HTTPException as exc:
+        assert exc.status_code == 400
+        assert exc.detail == "Collection already exists."
+    else:
+        raise AssertionError("Expected duplicate collection HTTPException")
+
+
+def test_shared_db_collection_list_filters_by_provider(monkeypatch):
+    from API_RAG_NEW import services
+
+    shared_client = FakeChromaClient()
+    shared_client.collections["local_docs"] = FakeCollection(
+        name="local_docs",
+        metadata={
+            "embedding_provider": "local_sbert",
+            "embedding_model": "keepitreal/vietnamese-sbert",
+            "embedding_dimension": 768,
+        },
     )
+    shared_client.collections["gemini_docs"] = FakeCollection(
+        name="gemini_docs",
+        metadata={
+            "embedding_provider": "gemini",
+            "embedding_model": "gemini-embedding-2",
+            "embedding_dimension": 768,
+        },
+    )
+    shared_client.collections["legacy_docs"] = FakeCollection(
+        name="legacy_docs",
+        metadata=None,
+    )
+    runtimes = {
+        "local_sbert": FakeRuntime("local_sbert", chroma_client=shared_client),
+        "gemini": FakeRuntime("gemini", chroma_client=shared_client),
+    }
+    monkeypatch.setattr(services, "get_embedding_runtime", lambda provider: runtimes[provider])
+
+    assert services.list_collections(provider="local_sbert") == {
+        "collections": ["local_docs", "legacy_docs"]
+    }
+    assert services.list_collections(provider="gemini") == {
+        "collections": ["gemini_docs"]
+    }
 
 
 def test_collection_metadata_mismatch_returns_http_400():
@@ -301,7 +351,7 @@ def test_collection_metadata_mismatch_returns_http_400():
         raise AssertionError("Expected HTTPException")
 
 
-def test_collection_metadata_includes_chunking_profile(monkeypatch):
+def test_create_collection_metadata_does_not_include_chunking_profile(monkeypatch):
     from API_RAG_NEW import services
     from API_RAG_NEW.schemas import CollectionCreateRequest
 
@@ -313,7 +363,45 @@ def test_collection_metadata_includes_chunking_profile(monkeypatch):
         provider="local_sbert",
     )
 
-    assert info.metadata["chunking_profile"] == "hybrid"
+    assert "chunking_profile" not in info.metadata
+
+
+def test_first_ingest_into_empty_collection_sets_chunking_profile(monkeypatch):
+    from API_RAG_NEW import services
+
+    runtime = FakeRuntime("local_sbert")
+    runtime.chroma_client.collections["empty"] = FakeCollection(
+        name="empty",
+        metadata={
+            "embedding_provider": "local_sbert",
+            "embedding_model": "keepitreal/vietnamese-sbert",
+            "embedding_dimension": 768,
+        },
+    )
+    monkeypatch.setattr(services, "get_embedding_runtime", lambda provider: runtime)
+    monkeypatch.setattr(
+        services,
+        "_build_ingest_records",
+        lambda *args, **kwargs: (1, [{"id": "r1", "chunk": "hello"}], {}),
+    )
+    monkeypatch.setattr(
+        services,
+        "add_records_to_collection",
+        lambda records, model, collection: len(records),
+    )
+
+    response = services.ingest_file_content(
+        "demo.txt",
+        b"hello",
+        "empty",
+        provider="local_sbert",
+        chunking_profile="semantic",
+    )
+
+    assert response.chunking_profile == "semantic"
+    assert runtime.chroma_client.collections["empty"].metadata["chunking_profile"] == (
+        "semantic"
+    )
 
 
 def test_appending_with_different_chunking_profile_returns_http_400(monkeypatch):
@@ -330,6 +418,11 @@ def test_appending_with_different_chunking_profile_returns_http_400(monkeypatch)
         },
     )
     monkeypatch.setattr(services, "get_embedding_runtime", lambda provider: runtime)
+    monkeypatch.setattr(
+        services,
+        "_build_ingest_records",
+        lambda *args, **kwargs: (1, [{"id": "r1", "chunk": "hello"}], {}),
+    )
 
     try:
         services.ingest_file_content(
@@ -346,6 +439,37 @@ def test_appending_with_different_chunking_profile_returns_http_400(monkeypatch)
         raise AssertionError("Expected HTTPException")
 
 
+def test_hybrid_fallback_sets_collection_metadata_to_semantic(monkeypatch):
+    from API_RAG_NEW import services
+
+    runtime = FakeRuntime("local_sbert")
+    monkeypatch.setattr(services, "get_embedding_runtime", lambda provider: runtime)
+
+    def fake_build_records(extension, raw_content, file_name, file_hash, chunker, profile):
+        if profile == "hybrid":
+            raise RuntimeError("hybrid failed")
+        return 1, [{"id": "r1", "chunk": "hello"}], {}
+
+    monkeypatch.setattr(services, "_build_ingest_records", fake_build_records)
+    monkeypatch.setattr(
+        services,
+        "add_records_to_collection",
+        lambda records, model, collection: len(records),
+    )
+
+    response = services.ingest_file_content(
+        "demo.txt",
+        b"hello",
+        "fallback",
+        provider="local_sbert",
+        chunking_profile="hybrid",
+    )
+
+    collection = runtime.chroma_client.collections["fallback"]
+    assert response.chunking_profile == "semantic"
+    assert collection.metadata["chunking_profile"] == "semantic"
+
+
 def test_legacy_local_collection_allows_ingest_without_chunking_metadata(monkeypatch):
     from API_RAG_NEW import services
 
@@ -355,21 +479,29 @@ def test_legacy_local_collection_allows_ingest_without_chunking_metadata(monkeyp
         metadata=None,
     )
     monkeypatch.setattr(services, "get_embedding_runtime", lambda provider: runtime)
-    monkeypatch.setattr(services, "_build_ingest_records", lambda *args, **kwargs: (1, [], {}))
+    monkeypatch.setattr(
+        services,
+        "_build_ingest_records",
+        lambda *args, **kwargs: (1, [{"id": "r1", "chunk": "hello"}], {}),
+    )
+    monkeypatch.setattr(
+        services,
+        "add_records_to_collection",
+        lambda records, model, collection: len(records),
+    )
 
-    try:
-        services.ingest_file_content(
-            "demo.txt",
-            b"hello",
-            "legacy",
-            provider="local_sbert",
-            chunking_profile="semantic",
-        )
-    except HTTPException as exc:
-        assert exc.status_code == 400
-        assert exc.detail == "No valid text to chunk."
-    else:
-        raise AssertionError("Expected no valid text HTTPException")
+    response = services.ingest_file_content(
+        "demo.txt",
+        b"hello",
+        "legacy",
+        provider="local_sbert",
+        chunking_profile="semantic",
+    )
+
+    assert response.chunking_profile == "semantic"
+    assert runtime.chroma_client.collections["legacy"].metadata["chunking_profile"] == (
+        "semantic"
+    )
 
 
 def test_query_endpoints_do_not_forward_chunking_profile(monkeypatch):
