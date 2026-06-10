@@ -71,12 +71,14 @@ class FakeGeminiModels:
         self.calls.append(
             {
                 "model": model,
-                "contents": list(contents),
+                "contents": contents,
                 "config": config,
             }
         )
+        if isinstance(contents, list):
+            return FakeEmbedResponse([FakeEmbedding([999.0, 999.0])])
         return FakeEmbedResponse(
-            [FakeEmbedding([float(index), float(index + 1)]) for index, _ in enumerate(contents)]
+            [FakeEmbedding([float(len(self.calls)), float(len(str(contents)))])]
         )
 
 
@@ -98,16 +100,16 @@ def test_gemini_provider_formats_documents_and_queries():
         client=client,
     )
 
-    assert provider.encode_documents(["abc"], titles=["doc"]) == [[0.0, 1.0]]
-    assert client.models.calls[-1]["contents"] == ["title: doc | text: abc"]
+    assert provider.encode_documents(["abc"], titles=["doc"]) == [[1.0, 22.0]]
+    assert client.models.calls[-1]["contents"] == "title: doc | text: abc"
 
-    assert provider.encode_queries(["abc"]) == [[0.0, 1.0]]
-    assert client.models.calls[-1]["contents"] == [
+    assert provider.encode_queries(["abc"]) == [[2.0, 37.0]]
+    assert client.models.calls[-1]["contents"] == (
         "task: question answering | query: abc"
-    ]
+    )
 
 
-def test_gemini_provider_batches_and_preserves_order():
+def test_gemini_provider_calls_embedding_2_once_per_document_text():
     from API_RAG_NEW.embeddings import GeminiTextEmbeddings
 
     client = FakeGeminiClient()
@@ -120,13 +122,66 @@ def test_gemini_provider_batches_and_preserves_order():
         client=client,
     )
 
-    vectors = provider.encode_documents(["a", "b", "c"], titles=["one", "two", "three"])
+    vectors = provider.encode_documents(["a", "b"], titles=["one", "two"])
 
-    assert vectors == [[0.0, 1.0], [1.0, 2.0], [0.0, 1.0]]
+    assert vectors == [[1.0, 20.0], [2.0, 20.0]]
     assert [call["contents"] for call in client.models.calls] == [
-        ["title: one | text: a", "title: two | text: b"],
-        ["title: three | text: c"],
+        "title: one | text: a",
+        "title: two | text: b",
     ]
+    assert all(isinstance(call["contents"], str) for call in client.models.calls)
+
+
+def test_gemini_provider_calls_embedding_2_once_per_query_text():
+    from API_RAG_NEW.embeddings import GeminiTextEmbeddings
+
+    client = FakeGeminiClient()
+    provider = GeminiTextEmbeddings(
+        api_key="fake",
+        model_name="gemini-embedding-2",
+        output_dimensionality=768,
+        task="question answering",
+        batch_size=2,
+        client=client,
+    )
+
+    vectors = provider.encode_queries(["q1", "q2"])
+
+    assert vectors == [[1.0, 36.0], [2.0, 36.0]]
+    assert [call["contents"] for call in client.models.calls] == [
+        "task: question answering | query: q1",
+        "task: question answering | query: q2",
+    ]
+    assert all(isinstance(call["contents"], str) for call in client.models.calls)
+
+
+class FailingGeminiModels:
+    def embed_content(self, *, model, contents, config):
+        raise ValueError("sdk failure with internal details")
+
+
+class FailingGeminiClient:
+    def __init__(self):
+        self.models = FailingGeminiModels()
+
+
+def test_gemini_provider_wraps_sdk_errors_without_secret():
+    from API_RAG_NEW.embeddings import GeminiTextEmbeddings
+
+    provider = GeminiTextEmbeddings(
+        api_key="secret-key",
+        model_name="gemini-embedding-2",
+        output_dimensionality=768,
+        task="question answering",
+        batch_size=32,
+        client=FailingGeminiClient(),
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        provider.encode_documents(["abc"], titles=["doc"])
+
+    assert str(exc_info.value) == "Gemini embedding request failed."
+    assert "secret-key" not in str(exc_info.value)
 
 
 class FakeDocumentEmbeddingModel:
@@ -142,10 +197,22 @@ class FakeDocumentEmbeddingModel:
 
 
 class FakeCollection:
-    def __init__(self, metadata=None):
+    def __init__(self, metadata=None, name="fake_collection"):
+        self.name = name
         self.metadata = metadata
         self.upserts = []
         self.queries = []
+        self.modify_calls = []
+
+    def count(self):
+        return 0
+
+    def modify(self, name=None, metadata=None):
+        self.modify_calls.append({"name": name, "metadata": metadata})
+        if name:
+            self.name = name
+        if metadata is not None:
+            self.metadata = metadata
 
     def upsert(self, **kwargs):
         self.upserts.append(kwargs)
@@ -303,6 +370,105 @@ def test_embedding_collection_metadata_contains_integer_dimension(monkeypatch):
         "embedding_dimension": 384,
     }
     assert isinstance(metadata["embedding_dimension"], int)
+
+
+class FakeChromaClient:
+    def __init__(self, collections=None):
+        self.collections = {collection.name: collection for collection in collections or []}
+        self.created = []
+
+    def list_collections(self):
+        return list(self.collections.values())
+
+    def get_or_create_collection(self, *, name, metadata=None):
+        collection = self.collections.get(name)
+        if collection is None:
+            collection = FakeCollection(metadata=metadata, name=name)
+            self.collections[name] = collection
+        self.created.append({"name": name, "metadata": metadata})
+        return collection
+
+    def get_collection(self, name):
+        return self.collections[name]
+
+
+def test_create_collection_writes_embedding_metadata(monkeypatch):
+    services = importlib.import_module("API_RAG_NEW.services")
+    schemas = importlib.import_module("API_RAG_NEW.schemas")
+    client = FakeChromaClient()
+    monkeypatch.setattr(services, "CHROMA_CLIENT", client)
+    monkeypatch.setattr(services, "ACTIVE_EMBEDDING_PROVIDER", "local_sbert")
+    monkeypatch.setattr(services, "ACTIVE_EMBEDDING_MODEL_NAME", "fake-local")
+    monkeypatch.setattr(services, "ACTIVE_EMBEDDING_DIMENSION", 384)
+
+    info = services.create_collection(
+        schemas.CollectionCreateRequest(name="demo", description="desc")
+    )
+
+    assert info.name == "demo"
+    assert client.created[0]["metadata"] == {
+        "description": "desc",
+        "embedding_provider": "local_sbert",
+        "embedding_model": "fake-local",
+        "embedding_dimension": 384,
+    }
+
+
+def test_update_collection_preserves_embedding_metadata(monkeypatch):
+    services = importlib.import_module("API_RAG_NEW.services")
+    schemas = importlib.import_module("API_RAG_NEW.schemas")
+    collection = FakeCollection(
+        name="demo",
+        metadata={
+            "description": "old",
+            "embedding_provider": "gemini",
+            "embedding_model": "gemini-embedding-2",
+            "embedding_dimension": 768,
+        },
+    )
+    monkeypatch.setattr(services, "CHROMA_CLIENT", FakeChromaClient([collection]))
+
+    services.update_collection(
+        "demo",
+        schemas.CollectionUpdateRequest(metadata={"description": "new", "owner": "qa"}),
+    )
+
+    assert collection.modify_calls[0]["metadata"] == {
+        "description": "new",
+        "owner": "qa",
+        "embedding_provider": "gemini",
+        "embedding_model": "gemini-embedding-2",
+        "embedding_dimension": 768,
+    }
+
+
+def test_update_collection_rejects_embedding_metadata_change(monkeypatch):
+    services = importlib.import_module("API_RAG_NEW.services")
+    schemas = importlib.import_module("API_RAG_NEW.schemas")
+    collection = FakeCollection(
+        name="demo",
+        metadata={
+            "embedding_provider": "gemini",
+            "embedding_model": "gemini-embedding-2",
+            "embedding_dimension": 768,
+        },
+    )
+    monkeypatch.setattr(services, "CHROMA_CLIENT", FakeChromaClient([collection]))
+
+    with pytest.raises(HTTPException) as exc_info:
+        services.update_collection(
+            "demo",
+            schemas.CollectionUpdateRequest(
+                metadata={
+                    "embedding_provider": "local_sbert",
+                    "embedding_model": "gemini-embedding-2",
+                    "embedding_dimension": 768,
+                }
+            ),
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "Embedding metadata cannot be changed" in exc_info.value.detail
 
 
 def test_runtime_payloads_include_safe_embedding_fields(monkeypatch):

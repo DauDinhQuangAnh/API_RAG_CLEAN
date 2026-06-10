@@ -79,31 +79,33 @@ class GeminiTextEmbeddings:
         vectors: list[list[float]] = []
         for start in range(0, len(text_list), self.batch_size):
             batch = text_list[start : start + self.batch_size]
-            batch_vectors = self._embed_batch(batch)
-            if len(batch_vectors) != len(batch):
-                raise RuntimeError(
-                    "Gemini embedding returned a mismatched number of vectors."
-                )
-            vectors.extend(batch_vectors)
+            for text in batch:
+                vectors.append(self._embed_one(text))
 
         if len(vectors) != len(text_list):
             raise RuntimeError("Gemini embedding returned an invalid vector count.")
         return vectors
 
-    def _embed_batch(self, texts: Sequence[str]) -> list[list[float]]:
-        response = self.client.models.embed_content(
-            model=self.model_name,
-            contents=list(texts),
-            config=types.EmbedContentConfig(output_dimensionality=self.dimension),
-        )
+    def _embed_one(self, text: str) -> list[float]:
+        try:
+            response = self.client.models.embed_content(
+                model=self.model_name,
+                contents=text,
+                config=types.EmbedContentConfig(output_dimensionality=self.dimension),
+            )
+        except Exception as exc:
+            raise RuntimeError("Gemini embedding request failed.") from exc
+
         embeddings = _extract_gemini_embeddings(response)
         vectors = _to_float_vectors(embeddings)
         if not vectors:
             raise RuntimeError("Gemini embedding returned no vectors.")
-        for vector in vectors:
-            if not vector:
-                raise RuntimeError("Gemini embedding returned an empty vector.")
-        return vectors
+        if len(vectors) != 1:
+            raise RuntimeError("Gemini embedding returned an invalid vector count.")
+        vector = vectors[0]
+        if not vector:
+            raise RuntimeError("Gemini embedding returned an empty vector.")
+        return vector
 
 
 def encode_documents(

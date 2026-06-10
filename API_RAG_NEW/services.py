@@ -155,10 +155,9 @@ def create_collection(req: CollectionCreateRequest) -> CollectionInfo:
     if cleaned_name in existing_names:
         raise HTTPException(status_code=400, detail="Collection already exists.")
 
-    metadata = {"description": req.description} if req.description else None
     collection = CHROMA_CLIENT.get_or_create_collection(
         name=cleaned_name,
-        metadata=metadata,
+        metadata=_embedding_collection_metadata(req.description),
     )
     return _to_collection_info(collection)
 
@@ -194,9 +193,9 @@ def update_collection(
 ) -> CollectionInfo:
     collection = _get_collection_or_404(collection_name)
     new_name = req.new_name or None
-    new_metadata = req.metadata or None
+    requested_metadata = req.metadata or None
 
-    if not new_name and not new_metadata:
+    if not new_name and not requested_metadata:
         raise HTTPException(
             status_code=400,
             detail="Nothing to update (new_name or metadata required).",
@@ -207,6 +206,17 @@ def update_collection(
         if not cleaned_name:
             raise HTTPException(status_code=400, detail="Invalid new_name.")
         new_name = cleaned_name
+
+    new_metadata = None
+    if requested_metadata is not None:
+        _ensure_embedding_metadata_not_changed(
+            collection.metadata or {},
+            requested_metadata,
+        )
+        new_metadata = _preserve_embedding_metadata(
+            collection.metadata or {},
+            requested_metadata,
+        )
 
     collection.modify(name=new_name, metadata=new_metadata)
     return _to_collection_info(_get_collection_or_404(new_name or collection_name))
@@ -227,6 +237,36 @@ def _embedding_collection_metadata(description: str | None) -> dict[str, Any]:
     if description:
         metadata["description"] = description
     return metadata
+
+
+def _ensure_embedding_metadata_not_changed(
+    current_metadata: dict[str, Any],
+    requested_metadata: dict[str, Any],
+) -> None:
+    for key in ("embedding_provider", "embedding_model", "embedding_dimension"):
+        if key not in requested_metadata:
+            continue
+        if key not in current_metadata:
+            raise HTTPException(
+                status_code=400,
+                detail="Embedding metadata cannot be changed.",
+            )
+        if str(requested_metadata[key]) != str(current_metadata[key]):
+            raise HTTPException(
+                status_code=400,
+                detail="Embedding metadata cannot be changed.",
+            )
+
+
+def _preserve_embedding_metadata(
+    current_metadata: dict[str, Any],
+    requested_metadata: dict[str, Any],
+) -> dict[str, Any]:
+    merged = dict(requested_metadata)
+    for key in ("embedding_provider", "embedding_model", "embedding_dimension"):
+        if key in current_metadata:
+            merged[key] = current_metadata[key]
+    return merged
 
 
 def _validate_collection_embedding_metadata(collection: Any) -> None:
