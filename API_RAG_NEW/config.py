@@ -5,6 +5,10 @@ import os
 import chromadb
 from dotenv import load_dotenv
 
+from API_RAG_NEW.embeddings import (
+    GeminiTextEmbeddings,
+    LocalSentenceTransformerEmbeddings,
+)
 from download_model import PRIMARY_MODEL_NAME, ensure_embedding_model
 
 
@@ -14,7 +18,7 @@ load_dotenv()
 GEMINI_PROVIDER = "gemini"
 DEFAULT_COLLECTION_DESCRIPTION = "A collection for RAG system"
 INGEST_BATCH_SIZE = 256
-DEFAULT_EMBEDDING_MODEL_NAME = PRIMARY_MODEL_NAME
+SUPPORTED_GEMINI_EMBEDDING_DIMENSIONS = {768, 1536, 3072}
 
 
 def parse_cors_origins(raw_value: str | None) -> list[str]:
@@ -68,6 +72,11 @@ def get_choice_env(name: str, default: str, supported_values: set[str]) -> str:
     return normalized if normalized in supported_values else default
 
 
+def get_gemini_embedding_dimension_env(name: str, default: int) -> int:
+    value = get_int_env(name, default)
+    return value if value in SUPPORTED_GEMINI_EMBEDDING_DIMENSIONS else default
+
+
 ROOT_PATH = os.getenv("ROOT_PATH", "").strip()
 ALLOWED_ORIGINS = parse_cors_origins(os.getenv("RAG_CORS_ORIGINS"))
 CHROMA_DB_PATH = os.getenv("CHROMA_DB_PATH", "db")
@@ -104,12 +113,64 @@ RAG_CHUNKING_PROFILE = get_choice_env(
     "hybrid",
     {"semantic", "hybrid"},
 )
-
-CHROMA_CLIENT = chromadb.PersistentClient(CHROMA_DB_PATH)
-EMBEDDING_MODEL, ACTIVE_EMBEDDING_MODEL_NAME, _ = ensure_embedding_model(
-    preferred_model=DEFAULT_EMBEDDING_MODEL_NAME
+RAG_EMBEDDING_PROVIDER = get_choice_env(
+    "RAG_EMBEDDING_PROVIDER",
+    "local_sbert",
+    {"local_sbert", "gemini"},
+)
+RAG_LOCAL_EMBEDDING_MODEL = os.getenv(
+    "RAG_LOCAL_EMBEDDING_MODEL",
+    PRIMARY_MODEL_NAME,
+)
+RAG_GEMINI_EMBEDDING_MODEL = os.getenv(
+    "RAG_GEMINI_EMBEDDING_MODEL",
+    "gemini-embedding-2",
+)
+RAG_GEMINI_EMBEDDING_DIMENSION = get_gemini_embedding_dimension_env(
+    "RAG_GEMINI_EMBEDDING_DIMENSION",
+    768,
+)
+RAG_GEMINI_EMBEDDING_TASK = (
+    os.getenv("RAG_GEMINI_EMBEDDING_TASK", "question answering").strip()
+    or "question answering"
+)
+RAG_GEMINI_EMBEDDING_BATCH_SIZE = max(
+    1,
+    min(get_int_env("RAG_GEMINI_EMBEDDING_BATCH_SIZE", 32), 128),
 )
 
 
 def get_gemini_api_key() -> str | None:
     return os.getenv("GEMINI_API_KEY") or None
+
+
+def build_embedding_provider():
+    if RAG_EMBEDDING_PROVIDER == "local_sbert":
+        local_model, active_model_name, _ = ensure_embedding_model(
+            preferred_model=RAG_LOCAL_EMBEDDING_MODEL
+        )
+        return LocalSentenceTransformerEmbeddings(local_model, active_model_name)
+
+    if RAG_EMBEDDING_PROVIDER == "gemini":
+        api_key = get_gemini_api_key()
+        if not api_key:
+            raise RuntimeError(
+                "GEMINI_API_KEY must be configured when "
+                "RAG_EMBEDDING_PROVIDER=gemini"
+            )
+        return GeminiTextEmbeddings(
+            api_key=api_key,
+            model_name=RAG_GEMINI_EMBEDDING_MODEL,
+            output_dimensionality=RAG_GEMINI_EMBEDDING_DIMENSION,
+            task=RAG_GEMINI_EMBEDDING_TASK,
+            batch_size=RAG_GEMINI_EMBEDDING_BATCH_SIZE,
+        )
+
+    raise RuntimeError(f"Unsupported RAG_EMBEDDING_PROVIDER: {RAG_EMBEDDING_PROVIDER}")
+
+
+CHROMA_CLIENT = chromadb.PersistentClient(CHROMA_DB_PATH)
+EMBEDDING_MODEL = build_embedding_provider()
+ACTIVE_EMBEDDING_PROVIDER = EMBEDDING_MODEL.provider
+ACTIVE_EMBEDDING_MODEL_NAME = EMBEDDING_MODEL.model_name
+ACTIVE_EMBEDDING_DIMENSION = EMBEDDING_MODEL.dimension

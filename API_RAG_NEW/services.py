@@ -18,7 +18,9 @@ from llms.onlinellms import OnlineLLMs
 
 from API_RAG_NEW.citations import build_citations_from_metadatas
 from API_RAG_NEW.config import (
+    ACTIVE_EMBEDDING_DIMENSION,
     ACTIVE_EMBEDDING_MODEL_NAME,
+    ACTIVE_EMBEDDING_PROVIDER,
     ALLOWED_ORIGINS,
     CHROMA_CLIENT,
     CHROMA_DB_PATH,
@@ -32,9 +34,15 @@ from API_RAG_NEW.config import (
     RAG_FINAL_TOP_N,
     RAG_CHUNKING_PROFILE,
     RAG_ENABLE_DISTANCE_GUARD,
+    RAG_EMBEDDING_PROVIDER,
+    RAG_GEMINI_EMBEDDING_BATCH_SIZE,
+    RAG_GEMINI_EMBEDDING_DIMENSION,
+    RAG_GEMINI_EMBEDDING_MODEL,
+    RAG_GEMINI_EMBEDDING_TASK,
     RAG_INCLUDE_NEIGHBORS,
     RAG_INITIAL_TOP_K,
     RAG_INTERNAL_API_KEY,
+    RAG_LOCAL_EMBEDDING_MODEL,
     RAG_LLM_QUEUE_TIMEOUT_SECONDS,
     RAG_MAX_CONCURRENT_LLM_CALLS,
     RAG_MAX_CONCURRENT_QUERIES,
@@ -107,7 +115,15 @@ def runtime_config_payload() -> dict[str, object]:
         "concurrency": concurrency_status_payload(),
         "gemini_model": GEMINI_MODEL,
         "gemini_reranker_model": GEMINI_RERANKER_MODEL,
+        "embedding_provider": ACTIVE_EMBEDDING_PROVIDER,
         "embedding_model_name": ACTIVE_EMBEDDING_MODEL_NAME,
+        "embedding_dimension": ACTIVE_EMBEDDING_DIMENSION,
+        "rag_embedding_provider": RAG_EMBEDDING_PROVIDER,
+        "rag_local_embedding_model": RAG_LOCAL_EMBEDDING_MODEL,
+        "rag_gemini_embedding_model": RAG_GEMINI_EMBEDDING_MODEL,
+        "rag_gemini_embedding_dimension": RAG_GEMINI_EMBEDDING_DIMENSION,
+        "rag_gemini_embedding_task": RAG_GEMINI_EMBEDDING_TASK,
+        "rag_gemini_embedding_batch_size": RAG_GEMINI_EMBEDDING_BATCH_SIZE,
         "chroma_db_path": CHROMA_DB_PATH,
         "cors_origins": ALLOWED_ORIGINS,
     }
@@ -117,7 +133,9 @@ def runtime_status_payload() -> dict[str, object]:
     return {
         "health": health_payload(),
         "concurrency": concurrency_status_payload(),
+        "embedding_provider": ACTIVE_EMBEDDING_PROVIDER,
         "embedding_model_name": ACTIVE_EMBEDDING_MODEL_NAME,
+        "embedding_dimension": ACTIVE_EMBEDDING_DIMENSION,
         "gemini_model": GEMINI_MODEL,
         "gemini_reranker_model": GEMINI_RERANKER_MODEL,
     }
@@ -200,6 +218,57 @@ def delete_collection(collection_name: str) -> dict[str, str]:
     return {"detail": "Collection deleted successfully."}
 
 
+def _embedding_collection_metadata(description: str | None) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "embedding_provider": ACTIVE_EMBEDDING_PROVIDER,
+        "embedding_model": ACTIVE_EMBEDDING_MODEL_NAME,
+        "embedding_dimension": int(ACTIVE_EMBEDDING_DIMENSION),
+    }
+    if description:
+        metadata["description"] = description
+    return metadata
+
+
+def _validate_collection_embedding_metadata(collection: Any) -> None:
+    metadata = collection.metadata or {}
+    provider = metadata.get("embedding_provider")
+    model = metadata.get("embedding_model")
+    dimension = metadata.get("embedding_dimension")
+
+    if provider is None and model is None and dimension is None:
+        if ACTIVE_EMBEDDING_PROVIDER == "local_sbert":
+            return
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Collection has no embedding metadata. Please re-ingest documents "
+                "into a Gemini embedding collection."
+            ),
+        )
+
+    if (
+        str(provider) == ACTIVE_EMBEDDING_PROVIDER
+        and str(model) == ACTIVE_EMBEDDING_MODEL_NAME
+        and _metadata_dimension(dimension) == int(ACTIVE_EMBEDDING_DIMENSION)
+    ):
+        return
+
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            "Collection was created with a different embedding provider/model. "
+            "Please create a new collection or re-ingest documents."
+        ),
+    )
+
+
+def _metadata_dimension(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def ingest_file_content(
     file_name: str,
     raw_content: bytes,
@@ -214,10 +283,15 @@ def ingest_file_content(
 
     final_collection_name = _resolve_collection_name(file_name, requested_collection_name)
     file_hash = _content_hash(raw_content)
-    collection = CHROMA_CLIENT.get_or_create_collection(
-        name=final_collection_name,
-        metadata={"description": DEFAULT_COLLECTION_DESCRIPTION},
-    )
+    existing_names = {collection.name for collection in CHROMA_CLIENT.list_collections()}
+    if final_collection_name in existing_names:
+        collection = _get_collection_or_404(final_collection_name)
+        _validate_collection_embedding_metadata(collection)
+    else:
+        collection = CHROMA_CLIENT.get_or_create_collection(
+            name=final_collection_name,
+            metadata=_embedding_collection_metadata(DEFAULT_COLLECTION_DESCRIPTION),
+        )
 
     chunker = ProtonxSemanticChunker(model=EMBEDDING_MODEL)
     pending_records: list[dict[str, Any]] = []
@@ -407,6 +481,7 @@ def query_collection(collection_name: str, req: QueryRequest) -> QueryResponse:
         raise HTTPException(status_code=400, detail="Query must not be empty.")
 
     collection = _get_collection_or_404(collection_name)
+    _validate_collection_embedding_metadata(collection)
     final_n = _resolve_final_docs_retrieval(req)
     rerank_llm = _build_optional_rerank_llm()
     try:

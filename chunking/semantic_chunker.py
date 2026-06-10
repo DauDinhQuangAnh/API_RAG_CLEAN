@@ -39,9 +39,7 @@ class ProtonxSemanticChunker(BaseChunker):
         self.threshold = threshold
         self.min_chunk_chars = min_chunk_chars
         self.max_chunk_chars = max_chunk_chars
-        self.model = (
-            model if isinstance(model, SentenceTransformer) else SentenceTransformer(model)
-        )
+        self.model = SentenceTransformer(model) if isinstance(model, str) else model
         _ensure_tokenizers()
 
     def embed_function(self, sentences):

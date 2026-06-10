@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Sequence
 
+from API_RAG_NEW.embeddings import encode_documents, encode_queries
 from API_RAG_NEW.reranker import rerank_candidate_ids
 
 
@@ -62,7 +63,8 @@ def add_records_to_collection(
 
     try:
         documents = [str(record["chunk"]) for record in records]
-        embeddings = model.encode(documents)
+        titles = [_record_embedding_title(record) for record in records]
+        embeddings = encode_documents(model, documents, titles=titles)
         collection.upsert(
             ids=[_resolve_record_id(record) for record in records],
             embeddings=embeddings,
@@ -79,6 +81,14 @@ def add_records_to_collection(
         raise RuntimeError(f"Error saving data to Chroma: {exc}") from exc
 
     return len(records)
+
+
+def _record_embedding_title(record: dict[str, Any]) -> str:
+    for key in ("section_title", "section_path", "table_title", "source"):
+        value = record.get(key)
+        if value:
+            return str(value)
+    return "none"
 
 
 def _resolve_record_id(record: dict[str, Any]) -> str:
@@ -161,7 +171,7 @@ def vector_search(
     final_n = max(1, int(number_docs_retrieval))
     initial_n = max(final_n, int(initial_top_k or final_n))
     query_hints = detect_query_hints(query)
-    query_embeddings = model.encode([query])
+    query_embeddings = encode_queries(model, [query])
     search_results = collection.query(
         query_embeddings=query_embeddings,
         n_results=initial_n,
