@@ -9,7 +9,7 @@ env/
 venv/
 ENV/
 python/
-
+.env
 # Runtime data
 db/
 .embedding_model_state.json
