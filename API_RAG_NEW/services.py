@@ -90,6 +90,8 @@ FINAL_ANSWER_FALLBACK_MESSAGE = (
 )
 ALLOWED_CHUNKING_PROFILES = {"hybrid", "semantic"}
 CHUNKING_PROFILE_ERROR = "Invalid chunking_profile. Allowed values: hybrid, semantic."
+GEMINI_STORAGE_PREFIX = f"{GEMINI_PROVIDER}."
+STORAGE_NAME_HASH_LENGTH = 12
 
 
 def health_payload() -> dict[str, str]:
@@ -108,6 +110,63 @@ def _normalize_provider(provider: str) -> str:
     if normalized in {LOCAL_EMBEDDING_PROVIDER, GEMINI_PROVIDER}:
         return normalized
     raise RuntimeError(f"Unsupported embedding provider: {provider}")
+
+
+def storage_collection_name(provider: str, logical_name: str) -> str:
+    try:
+        normalized_provider = _normalize_provider(provider)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported embedding provider.",
+        ) from exc
+    cleaned_name = _clean_logical_collection_name(logical_name)
+
+    if normalized_provider == LOCAL_EMBEDDING_PROVIDER:
+        return cleaned_name
+
+    if normalized_provider == GEMINI_PROVIDER:
+        candidate = f"{GEMINI_STORAGE_PREFIX}{cleaned_name}"
+        if len(candidate) <= 63:
+            return candidate
+
+        digest = hashlib.sha256(
+            f"{normalized_provider}:{cleaned_name}".encode("utf-8")
+        ).hexdigest()[:STORAGE_NAME_HASH_LENGTH]
+        max_base_length = (
+            63
+            - len(GEMINI_STORAGE_PREFIX)
+            - 1
+            - STORAGE_NAME_HASH_LENGTH
+        )
+        base = re.sub(r"[^a-zA-Z0-9]+$", "", cleaned_name[:max_base_length])
+        base = base or "collection"
+        return f"{GEMINI_STORAGE_PREFIX}{base}.{digest}"
+
+    raise HTTPException(status_code=400, detail="Unsupported embedding provider.")
+
+
+def logical_collection_name(
+    provider: str,
+    storage_name: str,
+    metadata: dict[str, Any] | None = None,
+) -> str:
+    if isinstance(metadata, dict):
+        logical_name = metadata.get("logical_collection_name")
+        if isinstance(logical_name, str) and logical_name.strip():
+            return logical_name
+
+    try:
+        normalized_provider = _normalize_provider(provider)
+    except RuntimeError:
+        return storage_name
+    if (
+        normalized_provider == GEMINI_PROVIDER
+        and storage_name.startswith(GEMINI_STORAGE_PREFIX)
+    ):
+        return storage_name[len(GEMINI_STORAGE_PREFIX) :]
+
+    return storage_name
 
 
 def _gemini_configured() -> bool:
@@ -213,7 +272,7 @@ def list_collections(provider: str = LOCAL_EMBEDDING_PROVIDER) -> dict[str, list
     collections = runtime.chroma_client.list_collections()
     return {
         "collections": [
-            collection.name
+            logical_collection_name(runtime.provider, collection.name, collection.metadata)
             for collection in collections
             if _collection_matches_runtime_metadata(runtime, collection)
         ]
@@ -225,21 +284,25 @@ def create_collection(
     provider: str = LOCAL_EMBEDDING_PROVIDER,
 ) -> CollectionInfo:
     runtime = _runtime_for_provider(provider)
-    cleaned_name = clean_collection_name(req.name)
-    if not cleaned_name:
-        raise HTTPException(status_code=400, detail="Invalid collection name.")
+    logical_name = _clean_logical_collection_name(req.name)
+    storage_name = storage_collection_name(runtime.provider, logical_name)
 
     existing_names = {
         collection.name for collection in runtime.chroma_client.list_collections()
     }
-    if cleaned_name in existing_names:
+    if storage_name in existing_names:
         raise HTTPException(status_code=400, detail="Collection already exists.")
 
     collection = runtime.chroma_client.get_or_create_collection(
-        name=cleaned_name,
-        metadata=_embedding_collection_metadata(runtime, req.description),
+        name=storage_name,
+        metadata=_embedding_collection_metadata(
+            runtime,
+            req.description,
+            logical_name=logical_name,
+            storage_name=storage_name,
+        ),
     )
-    return _to_collection_info(collection)
+    return _to_collection_info(runtime, collection)
 
 
 def get_collection_info(
@@ -247,9 +310,10 @@ def get_collection_info(
     provider: str = LOCAL_EMBEDDING_PROVIDER,
 ) -> CollectionInfo:
     runtime = _runtime_for_provider(provider)
-    collection = _get_collection_or_404(runtime, collection_name)
+    storage_name = storage_collection_name(runtime.provider, collection_name)
+    collection = _get_collection_or_404(runtime, storage_name)
     _validate_collection_embedding_metadata(runtime, collection)
-    return _to_collection_info(collection)
+    return _to_collection_info(runtime, collection)
 
 
 def get_collection_records(
@@ -259,7 +323,8 @@ def get_collection_records(
     provider: str = LOCAL_EMBEDDING_PROVIDER,
 ) -> CollectionRecordsResponse:
     runtime = _runtime_for_provider(provider)
-    collection = _get_collection_or_404(runtime, collection_name)
+    storage_name = storage_collection_name(runtime.provider, collection_name)
+    collection = _get_collection_or_404(runtime, storage_name)
     _validate_collection_embedding_metadata(runtime, collection)
     payload = collection.get(
         limit=limit,
@@ -267,7 +332,11 @@ def get_collection_records(
         include=["metadatas", "documents"],
     )
     return CollectionRecordsResponse(
-        collection_name=collection.name,
+        collection_name=logical_collection_name(
+            runtime.provider,
+            collection.name,
+            collection.metadata,
+        ),
         count=collection.count(),
         limit=limit,
         offset=offset,
@@ -283,22 +352,32 @@ def update_collection(
     provider: str = LOCAL_EMBEDDING_PROVIDER,
 ) -> CollectionInfo:
     runtime = _runtime_for_provider(provider)
-    collection = _get_collection_or_404(runtime, collection_name)
+    current_storage_name = storage_collection_name(runtime.provider, collection_name)
+    collection = _get_collection_or_404(runtime, current_storage_name)
     _validate_collection_embedding_metadata(runtime, collection)
-    new_name = req.new_name or None
+    new_logical_name = req.new_name or None
+    new_storage_name = None
     requested_metadata = req.metadata or None
 
-    if not new_name and not requested_metadata:
+    if not new_logical_name and not requested_metadata:
         raise HTTPException(
             status_code=400,
             detail="Nothing to update (new_name or metadata required).",
         )
 
-    if new_name:
-        cleaned_name = clean_collection_name(new_name)
-        if not cleaned_name:
-            raise HTTPException(status_code=400, detail="Invalid new_name.")
-        new_name = cleaned_name
+    if new_logical_name:
+        new_logical_name = _clean_logical_collection_name(new_logical_name)
+        new_storage_name = storage_collection_name(runtime.provider, new_logical_name)
+        if new_storage_name != current_storage_name:
+            existing_names = {
+                collection.name
+                for collection in runtime.chroma_client.list_collections()
+            }
+            if new_storage_name in existing_names:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Collection already exists.",
+                )
 
     new_metadata = None
     if requested_metadata is not None:
@@ -311,12 +390,27 @@ def update_collection(
             requested_metadata,
         )
 
-    if new_metadata is None:
-        collection.modify(name=new_name)
+    target_logical_name = new_logical_name or logical_collection_name(
+        runtime.provider,
+        collection.name,
+        collection.metadata,
+    )
+    target_storage_name = new_storage_name or current_storage_name
+
+    merged_metadata = _collection_identity_metadata(
+        runtime,
+        new_metadata if new_metadata is not None else dict(collection.metadata or {}),
+        target_logical_name,
+        target_storage_name,
+    )
+
+    if new_storage_name is None:
+        collection.modify(metadata=merged_metadata)
     else:
-        collection.modify(name=new_name, metadata=new_metadata)
+        collection.modify(name=new_storage_name, metadata=merged_metadata)
     return _to_collection_info(
-        _get_collection_or_404(runtime, new_name or collection_name)
+        runtime,
+        _get_collection_or_404(runtime, target_storage_name),
     )
 
 
@@ -325,9 +419,10 @@ def delete_collection(
     provider: str = LOCAL_EMBEDDING_PROVIDER,
 ) -> dict[str, str]:
     runtime = _runtime_for_provider(provider)
-    collection = _get_collection_or_404(runtime, collection_name)
+    storage_name = storage_collection_name(runtime.provider, collection_name)
+    collection = _get_collection_or_404(runtime, storage_name)
     _validate_collection_embedding_metadata(runtime, collection)
-    runtime.chroma_client.delete_collection(name=collection_name)
+    runtime.chroma_client.delete_collection(name=storage_name)
     return {"detail": "Collection deleted successfully."}
 
 
@@ -335,12 +430,19 @@ def _embedding_collection_metadata(
     runtime: EmbeddingRuntime,
     description: str | None,
     chunking_profile: str | None = None,
+    *,
+    logical_name: str | None = None,
+    storage_name: str | None = None,
 ) -> dict[str, Any]:
     metadata: dict[str, Any] = {
         "embedding_provider": runtime.provider,
         "embedding_model": runtime.model_name,
         "embedding_dimension": int(runtime.dimension),
     }
+    if logical_name:
+        metadata["logical_collection_name"] = logical_name
+    if storage_name:
+        metadata["storage_collection_name"] = storage_name
     if chunking_profile:
         metadata["chunking_profile"] = chunking_profile
     if description:
@@ -357,6 +459,8 @@ def _ensure_embedding_metadata_not_changed(
         "embedding_model",
         "embedding_dimension",
         "chunking_profile",
+        "logical_collection_name",
+        "storage_collection_name",
     ):
         if key not in requested_metadata:
             continue
@@ -382,9 +486,29 @@ def _preserve_embedding_metadata(
         "embedding_model",
         "embedding_dimension",
         "chunking_profile",
+        "logical_collection_name",
+        "storage_collection_name",
     ):
         if key in current_metadata:
             merged[key] = current_metadata[key]
+    return merged
+
+
+def _collection_identity_metadata(
+    runtime: EmbeddingRuntime,
+    metadata: dict[str, Any],
+    logical_name: str,
+    storage_name: str,
+) -> dict[str, Any]:
+    merged = dict(metadata)
+    merged.update(
+        _embedding_collection_metadata(
+            runtime,
+            None,
+            logical_name=logical_name,
+            storage_name=storage_name,
+        )
+    )
     return merged
 
 
@@ -428,7 +552,10 @@ def _collection_matches_runtime_metadata(
     dimension = metadata.get("embedding_dimension")
 
     if provider is None and model is None and dimension is None:
-        return runtime.provider == LOCAL_EMBEDDING_PROVIDER
+        return (
+            runtime.provider == LOCAL_EMBEDDING_PROVIDER
+            and not collection.name.startswith(GEMINI_STORAGE_PREFIX)
+        )
 
     return (
         str(provider) == runtime.provider
@@ -462,7 +589,19 @@ def _set_collection_chunking_profile(
     final_profile: str,
 ) -> None:
     merged_metadata = dict(collection.metadata or {})
-    merged_metadata.update(_embedding_collection_metadata(runtime, None, final_profile))
+    merged_metadata.update(
+        _embedding_collection_metadata(
+            runtime,
+            None,
+            final_profile,
+            logical_name=logical_collection_name(
+                runtime.provider,
+                collection.name,
+                collection.metadata,
+            ),
+            storage_name=collection.name,
+        )
+    )
     collection.modify(metadata=merged_metadata)
 
 
@@ -471,6 +610,13 @@ def _metadata_dimension(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _clean_logical_collection_name(name: str) -> str:
+    cleaned_name = clean_collection_name(name)
+    if not cleaned_name:
+        raise HTTPException(status_code=400, detail="Invalid collection name.")
+    return cleaned_name
 
 
 def ingest_file_content(
@@ -490,19 +636,22 @@ def ingest_file_content(
         )
 
     final_collection_name = _resolve_collection_name(file_name, requested_collection_name)
+    final_storage_name = storage_collection_name(runtime.provider, final_collection_name)
     file_hash = _content_hash(raw_content)
     existing_names = {
         collection.name for collection in runtime.chroma_client.list_collections()
     }
-    if final_collection_name in existing_names:
-        collection = _get_collection_or_404(runtime, final_collection_name)
+    if final_storage_name in existing_names:
+        collection = _get_collection_or_404(runtime, final_storage_name)
         _validate_collection_embedding_metadata(runtime, collection)
     else:
         collection = runtime.chroma_client.get_or_create_collection(
-            name=final_collection_name,
+            name=final_storage_name,
             metadata=_embedding_collection_metadata(
                 runtime,
                 DEFAULT_COLLECTION_DESCRIPTION,
+                logical_name=final_collection_name,
+                storage_name=final_storage_name,
             ),
         )
 
@@ -702,7 +851,8 @@ def query_collection(
         raise HTTPException(status_code=400, detail="Query must not be empty.")
 
     runtime = _runtime_for_provider(provider)
-    collection = _get_collection_or_404(runtime, collection_name)
+    storage_name = storage_collection_name(runtime.provider, collection_name)
+    collection = _get_collection_or_404(runtime, storage_name)
     _validate_collection_embedding_metadata(runtime, collection)
     final_n = _resolve_final_docs_retrieval(req)
     rerank_llm = _build_optional_rerank_llm()
@@ -798,16 +948,20 @@ def _build_query_prompt(query: str, retrieved_data: str) -> str:
     )
 
 
-def _get_collection_or_404(runtime: EmbeddingRuntime, collection_name: str) -> Any:
+def _get_collection_or_404(runtime: EmbeddingRuntime, storage_name: str) -> Any:
     try:
-        return runtime.chroma_client.get_collection(name=collection_name)
+        return runtime.chroma_client.get_collection(name=storage_name)
     except Exception as exc:
         raise HTTPException(status_code=404, detail="Collection not found.") from exc
 
 
-def _to_collection_info(collection: Any) -> CollectionInfo:
+def _to_collection_info(runtime: EmbeddingRuntime, collection: Any) -> CollectionInfo:
     return CollectionInfo(
-        name=collection.name,
+        name=logical_collection_name(
+            runtime.provider,
+            collection.name,
+            collection.metadata,
+        ),
         metadata=collection.metadata,
         count=collection.count(),
     )

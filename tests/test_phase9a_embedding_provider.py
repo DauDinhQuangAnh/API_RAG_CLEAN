@@ -433,6 +433,8 @@ def test_create_collection_writes_embedding_metadata(monkeypatch):
     assert info.name == "demo"
     assert client.created[0]["metadata"] == {
         "description": "desc",
+        "logical_collection_name": "demo",
+        "storage_collection_name": "demo",
         "embedding_provider": "local_sbert",
         "embedding_model": "fake-local",
         "embedding_dimension": 384,
@@ -443,9 +445,11 @@ def test_update_collection_preserves_embedding_metadata(monkeypatch):
     services = importlib.import_module("API_RAG_NEW.services")
     schemas = importlib.import_module("API_RAG_NEW.schemas")
     collection = FakeCollection(
-        name="demo",
+        name="gemini.demo",
         metadata={
             "description": "old",
+            "logical_collection_name": "demo",
+            "storage_collection_name": "gemini.demo",
             "embedding_provider": "gemini",
             "embedding_model": "gemini-embedding-2",
             "embedding_dimension": 768,
@@ -468,6 +472,8 @@ def test_update_collection_preserves_embedding_metadata(monkeypatch):
     assert collection.modify_calls[0]["metadata"] == {
         "description": "new",
         "owner": "qa",
+        "logical_collection_name": "demo",
+        "storage_collection_name": "gemini.demo",
         "embedding_provider": "gemini",
         "embedding_model": "gemini-embedding-2",
         "embedding_dimension": 768,
@@ -479,8 +485,10 @@ def test_update_collection_rejects_embedding_metadata_change(monkeypatch):
     services = importlib.import_module("API_RAG_NEW.services")
     schemas = importlib.import_module("API_RAG_NEW.schemas")
     collection = FakeCollection(
-        name="demo",
+        name="gemini.demo",
         metadata={
+            "logical_collection_name": "demo",
+            "storage_collection_name": "gemini.demo",
             "embedding_provider": "gemini",
             "embedding_model": "gemini-embedding-2",
             "embedding_dimension": 768,

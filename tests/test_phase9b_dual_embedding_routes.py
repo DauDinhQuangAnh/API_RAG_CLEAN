@@ -15,11 +15,12 @@ os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
 
 class FakeCollection:
-    def __init__(self, name="demo", metadata=None):
+    def __init__(self, name="demo", metadata=None, owner=None):
         self.name = name
         self.metadata = metadata
         self.upserts = []
         self.modify_calls = []
+        self._owner = owner
 
     def count(self):
         return 0
@@ -27,6 +28,9 @@ class FakeCollection:
     def modify(self, name=None, metadata=None):
         self.modify_calls.append({"name": name, "metadata": metadata})
         if name:
+            if self._owner is not None:
+                self._owner.collections.pop(self.name, None)
+                self._owner.collections[name] = self
             self.name = name
         if metadata is not None:
             self.metadata = metadata
@@ -46,12 +50,17 @@ class FakeChromaClient:
     def get_or_create_collection(self, *, name, metadata=None):
         collection = self.collections.get(name)
         if collection is None:
-            collection = FakeCollection(name=name, metadata=metadata)
+            collection = FakeCollection(name=name, metadata=metadata, owner=self)
             self.collections[name] = collection
         return collection
 
     def get_collection(self, name):
-        return self.collections[name]
+        if name in self.collections:
+            return self.collections[name]
+        for collection in self.collections.values():
+            if collection.name == name:
+                return collection
+        raise KeyError(name)
 
     def delete_collection(self, name):
         self.deleted.append(name)
@@ -257,7 +266,7 @@ def test_gemini_routes_fail_without_key_but_local_routes_work(monkeypatch):
     assert "GEMINI_API_KEY" in gemini_response.json()["detail"]
 
 
-def test_same_collection_name_is_unique_in_shared_db(monkeypatch):
+def test_same_logical_name_is_provider_scoped_in_shared_db(monkeypatch):
     from API_RAG_NEW import services
     from API_RAG_NEW.schemas import CollectionCreateRequest
 
@@ -280,16 +289,21 @@ def test_same_collection_name_is_unique_in_shared_db(monkeypatch):
         ]
         == "local_sbert"
     )
-    try:
-        services.create_collection(
-            CollectionCreateRequest(name="shared"),
-            provider="gemini",
-        )
-    except HTTPException as exc:
-        assert exc.status_code == 400
-        assert exc.detail == "Collection already exists."
-    else:
-        raise AssertionError("Expected duplicate collection HTTPException")
+    gemini_info = services.create_collection(
+        CollectionCreateRequest(name="shared"),
+        provider="gemini",
+    )
+
+    assert gemini_info.name == "shared"
+    assert "shared" in shared_client.collections
+    assert "gemini.shared" in shared_client.collections
+    assert shared_client.get_collection("gemini.shared").metadata == {
+        "logical_collection_name": "shared",
+        "storage_collection_name": "gemini.shared",
+        "embedding_provider": "gemini",
+        "embedding_model": "gemini-embedding-2",
+        "embedding_dimension": 768,
+    }
 
 
 def test_shared_db_collection_list_filters_by_provider(monkeypatch):
@@ -304,9 +318,11 @@ def test_shared_db_collection_list_filters_by_provider(monkeypatch):
             "embedding_dimension": 768,
         },
     )
-    shared_client.collections["gemini_docs"] = FakeCollection(
-        name="gemini_docs",
+    shared_client.collections["gemini.docs"] = FakeCollection(
+        name="gemini.docs",
         metadata={
+            "logical_collection_name": "docs",
+            "storage_collection_name": "gemini.docs",
             "embedding_provider": "gemini",
             "embedding_model": "gemini-embedding-2",
             "embedding_dimension": 768,
@@ -326,8 +342,146 @@ def test_shared_db_collection_list_filters_by_provider(monkeypatch):
         "collections": ["local_docs", "legacy_docs"]
     }
     assert services.list_collections(provider="gemini") == {
-        "collections": ["gemini_docs"]
+        "collections": ["docs"]
     }
+
+
+def test_query_uses_provider_scoped_storage_name(monkeypatch):
+    from API_RAG_NEW import services
+    from API_RAG_NEW.schemas import QueryRequest
+
+    shared_client = FakeChromaClient()
+    local_collection = shared_client.get_or_create_collection(
+        name="bv_yhct",
+        metadata={
+            "logical_collection_name": "bv_yhct",
+            "storage_collection_name": "bv_yhct",
+            "embedding_provider": "local_sbert",
+            "embedding_model": "keepitreal/vietnamese-sbert",
+            "embedding_dimension": 768,
+        },
+    )
+    gemini_collection = shared_client.get_or_create_collection(
+        name="gemini.bv_yhct",
+        metadata={
+            "logical_collection_name": "bv_yhct",
+            "storage_collection_name": "gemini.bv_yhct",
+            "embedding_provider": "gemini",
+            "embedding_model": "gemini-embedding-2",
+            "embedding_dimension": 768,
+        },
+    )
+    calls = []
+    runtimes = {
+        "local_sbert": FakeRuntime("local_sbert", chroma_client=shared_client),
+        "gemini": FakeRuntime("gemini", chroma_client=shared_client),
+    }
+    monkeypatch.setattr(services, "get_embedding_runtime", lambda provider: runtimes[provider])
+    monkeypatch.setattr(services, "_build_optional_rerank_llm", lambda: None)
+    monkeypatch.setattr(services, "_build_llm", lambda: type("FakeLLM", (), {"generate_content": lambda self, prompt: "ok"})())
+
+    def fake_vector_search(model, query, collection, final_n, **kwargs):
+        calls.append(collection.name)
+        return [[]], ""
+
+    monkeypatch.setattr(services, "vector_search", fake_vector_search)
+
+    services.query_collection(
+        "bv_yhct",
+        QueryRequest(query="hello"),
+        provider="local_sbert",
+    )
+    services.query_collection(
+        "bv_yhct",
+        QueryRequest(query="hello"),
+        provider="gemini",
+    )
+
+    assert calls == [local_collection.name, gemini_collection.name]
+
+
+def test_delete_gemini_does_not_delete_local(monkeypatch):
+    from API_RAG_NEW import services
+
+    shared_client = FakeChromaClient()
+    shared_client.get_or_create_collection(
+        name="bv_yhct",
+        metadata={
+            "logical_collection_name": "bv_yhct",
+            "storage_collection_name": "bv_yhct",
+            "embedding_provider": "local_sbert",
+            "embedding_model": "keepitreal/vietnamese-sbert",
+            "embedding_dimension": 768,
+        },
+    )
+    shared_client.get_or_create_collection(
+        name="gemini.bv_yhct",
+        metadata={
+            "logical_collection_name": "bv_yhct",
+            "storage_collection_name": "gemini.bv_yhct",
+            "embedding_provider": "gemini",
+            "embedding_model": "gemini-embedding-2",
+            "embedding_dimension": 768,
+        },
+    )
+    runtimes = {
+        "local_sbert": FakeRuntime("local_sbert", chroma_client=shared_client),
+        "gemini": FakeRuntime("gemini", chroma_client=shared_client),
+    }
+    monkeypatch.setattr(services, "get_embedding_runtime", lambda provider: runtimes[provider])
+
+    services.delete_collection("bv_yhct", provider="gemini")
+
+    assert "bv_yhct" in shared_client.collections
+    assert "gemini.bv_yhct" not in shared_client.collections
+    assert shared_client.deleted == ["gemini.bv_yhct"]
+
+
+def test_rename_gemini_updates_storage_name_and_metadata(monkeypatch):
+    from API_RAG_NEW import services
+    from API_RAG_NEW.schemas import CollectionUpdateRequest
+
+    shared_client = FakeChromaClient()
+    collection = shared_client.get_or_create_collection(
+        name="gemini.old_name",
+        metadata={
+            "logical_collection_name": "old_name",
+            "storage_collection_name": "gemini.old_name",
+            "embedding_provider": "gemini",
+            "embedding_model": "gemini-embedding-2",
+            "embedding_dimension": 768,
+            "chunking_profile": "semantic",
+        },
+    )
+    runtime = FakeRuntime("gemini", chroma_client=shared_client)
+    monkeypatch.setattr(services, "get_embedding_runtime", lambda provider: runtime)
+
+    info = services.update_collection(
+        "old_name",
+        CollectionUpdateRequest(new_name="new_name"),
+        provider="gemini",
+    )
+
+    assert info.name == "new_name"
+    assert "gemini.old_name" not in shared_client.collections
+    assert "gemini.new_name" in shared_client.collections
+    assert collection.metadata["logical_collection_name"] == "new_name"
+    assert collection.metadata["storage_collection_name"] == "gemini.new_name"
+    assert collection.metadata["chunking_profile"] == "semantic"
+
+
+def test_long_gemini_storage_name_uses_valid_hash_fallback():
+    from API_RAG_NEW import services
+
+    logical_name = "a" * 60
+    storage_name = services.storage_collection_name("gemini", logical_name)
+
+    assert storage_name.startswith("gemini.")
+    assert storage_name != f"gemini.{logical_name}"
+    assert len(storage_name) <= 63
+    assert storage_name[0].isalnum()
+    assert storage_name[-1].isalnum()
+    assert all(char.isalnum() or char in {"_", "-", "."} for char in storage_name)
 
 
 def test_collection_metadata_mismatch_returns_http_400():
