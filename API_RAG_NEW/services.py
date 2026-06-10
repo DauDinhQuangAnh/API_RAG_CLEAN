@@ -18,18 +18,18 @@ from llms.onlinellms import OnlineLLMs
 
 from API_RAG_NEW.citations import build_citations_from_metadatas
 from API_RAG_NEW.config import (
-    ACTIVE_EMBEDDING_DIMENSION,
-    ACTIVE_EMBEDDING_MODEL_NAME,
-    ACTIVE_EMBEDDING_PROVIDER,
     ALLOWED_ORIGINS,
-    CHROMA_CLIENT,
     CHROMA_DB_PATH,
+    CHROMA_DB_PATH_GEMINI,
+    CHROMA_DB_PATH_LOCAL,
     DEFAULT_COLLECTION_DESCRIPTION,
-    EMBEDDING_MODEL,
+    EmbeddingRuntime,
     GEMINI_MODEL,
     GEMINI_PROVIDER,
     GEMINI_RERANKER_MODEL,
     INGEST_BATCH_SIZE,
+    LOCAL_EMBEDDING_PROVIDER,
+    LOCAL_EMBEDDING_RUNTIME,
     RAG_ENABLE_FINAL_ANSWER_FALLBACK,
     RAG_FINAL_TOP_N,
     RAG_CHUNKING_PROFILE,
@@ -51,6 +51,7 @@ from API_RAG_NEW.config import (
     RAG_MAX_TOTAL_CANDIDATES,
     RAG_QUERY_QUEUE_TIMEOUT_SECONDS,
     RAG_RERANKER_TYPE,
+    get_embedding_runtime,
     get_gemini_api_key,
 )
 from API_RAG_NEW.concurrency import concurrency_status_payload
@@ -93,6 +94,43 @@ def health_payload() -> dict[str, str]:
     return {"status": "ok"}
 
 
+def _runtime_for_provider(provider: str) -> EmbeddingRuntime:
+    try:
+        return get_embedding_runtime(_normalize_provider(provider))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _normalize_provider(provider: str) -> str:
+    normalized = str(provider or LOCAL_EMBEDDING_PROVIDER).strip().casefold()
+    if normalized in {LOCAL_EMBEDDING_PROVIDER, GEMINI_PROVIDER}:
+        return normalized
+    raise RuntimeError(f"Unsupported embedding provider: {provider}")
+
+
+def _gemini_configured() -> bool:
+    return bool(get_gemini_api_key())
+
+
+def _runtime_payload(runtime: EmbeddingRuntime) -> dict[str, object]:
+    return {
+        "provider": runtime.provider,
+        "model_name": runtime.model_name,
+        "dimension": runtime.dimension,
+        "chroma_db_path": runtime.chroma_db_path,
+    }
+
+
+def _gemini_runtime_payload() -> dict[str, object]:
+    return {
+        "provider": GEMINI_PROVIDER,
+        "model_name": RAG_GEMINI_EMBEDDING_MODEL,
+        "dimension": RAG_GEMINI_EMBEDDING_DIMENSION,
+        "configured": _gemini_configured(),
+        "chroma_db_path": CHROMA_DB_PATH_GEMINI,
+    }
+
+
 def runtime_config_payload() -> dict[str, object]:
     return {
         "rag_initial_top_k": RAG_INITIAL_TOP_K,
@@ -115,9 +153,13 @@ def runtime_config_payload() -> dict[str, object]:
         "concurrency": concurrency_status_payload(),
         "gemini_model": GEMINI_MODEL,
         "gemini_reranker_model": GEMINI_RERANKER_MODEL,
-        "embedding_provider": ACTIVE_EMBEDDING_PROVIDER,
-        "embedding_model_name": ACTIVE_EMBEDDING_MODEL_NAME,
-        "embedding_dimension": ACTIVE_EMBEDDING_DIMENSION,
+        "embedding_routes": {
+            "root": LOCAL_EMBEDDING_PROVIDER,
+            "local": LOCAL_EMBEDDING_PROVIDER,
+            "gemini": GEMINI_PROVIDER,
+        },
+        "local_embedding": _runtime_payload(LOCAL_EMBEDDING_RUNTIME),
+        "gemini_embedding": _gemini_runtime_payload(),
         "rag_embedding_provider": RAG_EMBEDDING_PROVIDER,
         "rag_local_embedding_model": RAG_LOCAL_EMBEDDING_MODEL,
         "rag_gemini_embedding_model": RAG_GEMINI_EMBEDDING_MODEL,
@@ -125,6 +167,8 @@ def runtime_config_payload() -> dict[str, object]:
         "rag_gemini_embedding_task": RAG_GEMINI_EMBEDDING_TASK,
         "rag_gemini_embedding_batch_size": RAG_GEMINI_EMBEDDING_BATCH_SIZE,
         "chroma_db_path": CHROMA_DB_PATH,
+        "chroma_db_path_local": CHROMA_DB_PATH_LOCAL,
+        "chroma_db_path_gemini": CHROMA_DB_PATH_GEMINI,
         "cors_origins": ALLOWED_ORIGINS,
     }
 
@@ -133,45 +177,65 @@ def runtime_status_payload() -> dict[str, object]:
     return {
         "health": health_payload(),
         "concurrency": concurrency_status_payload(),
-        "embedding_provider": ACTIVE_EMBEDDING_PROVIDER,
-        "embedding_model_name": ACTIVE_EMBEDDING_MODEL_NAME,
-        "embedding_dimension": ACTIVE_EMBEDDING_DIMENSION,
+        "embedding_routes": {
+            "root": LOCAL_EMBEDDING_PROVIDER,
+            "local": LOCAL_EMBEDDING_PROVIDER,
+            "gemini": GEMINI_PROVIDER,
+        },
+        "local_embedding": _runtime_payload(LOCAL_EMBEDDING_RUNTIME),
+        "gemini_embedding": _gemini_runtime_payload(),
         "gemini_model": GEMINI_MODEL,
         "gemini_reranker_model": GEMINI_RERANKER_MODEL,
     }
 
 
-def list_collections() -> dict[str, list[str]]:
-    collections = CHROMA_CLIENT.list_collections()
+def list_collections(provider: str = LOCAL_EMBEDDING_PROVIDER) -> dict[str, list[str]]:
+    runtime = _runtime_for_provider(provider)
+    collections = runtime.chroma_client.list_collections()
     return {"collections": [collection.name for collection in collections]}
 
 
-def create_collection(req: CollectionCreateRequest) -> CollectionInfo:
+def create_collection(
+    req: CollectionCreateRequest,
+    provider: str = LOCAL_EMBEDDING_PROVIDER,
+) -> CollectionInfo:
+    runtime = _runtime_for_provider(provider)
     cleaned_name = clean_collection_name(req.name)
     if not cleaned_name:
         raise HTTPException(status_code=400, detail="Invalid collection name.")
 
-    existing_names = {collection.name for collection in CHROMA_CLIENT.list_collections()}
+    existing_names = {
+        collection.name for collection in runtime.chroma_client.list_collections()
+    }
     if cleaned_name in existing_names:
         raise HTTPException(status_code=400, detail="Collection already exists.")
 
-    collection = CHROMA_CLIENT.get_or_create_collection(
+    collection = runtime.chroma_client.get_or_create_collection(
         name=cleaned_name,
-        metadata=_embedding_collection_metadata(req.description),
+        metadata=_embedding_collection_metadata(runtime, req.description),
     )
     return _to_collection_info(collection)
 
 
-def get_collection_info(collection_name: str) -> CollectionInfo:
-    return _to_collection_info(_get_collection_or_404(collection_name))
+def get_collection_info(
+    collection_name: str,
+    provider: str = LOCAL_EMBEDDING_PROVIDER,
+) -> CollectionInfo:
+    runtime = _runtime_for_provider(provider)
+    collection = _get_collection_or_404(runtime, collection_name)
+    _validate_collection_embedding_metadata(runtime, collection)
+    return _to_collection_info(collection)
 
 
 def get_collection_records(
     collection_name: str,
     limit: int,
     offset: int,
+    provider: str = LOCAL_EMBEDDING_PROVIDER,
 ) -> CollectionRecordsResponse:
-    collection = _get_collection_or_404(collection_name)
+    runtime = _runtime_for_provider(provider)
+    collection = _get_collection_or_404(runtime, collection_name)
+    _validate_collection_embedding_metadata(runtime, collection)
     payload = collection.get(
         limit=limit,
         offset=offset,
@@ -189,9 +253,13 @@ def get_collection_records(
 
 
 def update_collection(
-    collection_name: str, req: CollectionUpdateRequest
+    collection_name: str,
+    req: CollectionUpdateRequest,
+    provider: str = LOCAL_EMBEDDING_PROVIDER,
 ) -> CollectionInfo:
-    collection = _get_collection_or_404(collection_name)
+    runtime = _runtime_for_provider(provider)
+    collection = _get_collection_or_404(runtime, collection_name)
+    _validate_collection_embedding_metadata(runtime, collection)
     new_name = req.new_name or None
     requested_metadata = req.metadata or None
 
@@ -219,20 +287,30 @@ def update_collection(
         )
 
     collection.modify(name=new_name, metadata=new_metadata)
-    return _to_collection_info(_get_collection_or_404(new_name or collection_name))
+    return _to_collection_info(
+        _get_collection_or_404(runtime, new_name or collection_name)
+    )
 
 
-def delete_collection(collection_name: str) -> dict[str, str]:
-    _get_collection_or_404(collection_name)
-    CHROMA_CLIENT.delete_collection(name=collection_name)
+def delete_collection(
+    collection_name: str,
+    provider: str = LOCAL_EMBEDDING_PROVIDER,
+) -> dict[str, str]:
+    runtime = _runtime_for_provider(provider)
+    collection = _get_collection_or_404(runtime, collection_name)
+    _validate_collection_embedding_metadata(runtime, collection)
+    runtime.chroma_client.delete_collection(name=collection_name)
     return {"detail": "Collection deleted successfully."}
 
 
-def _embedding_collection_metadata(description: str | None) -> dict[str, Any]:
+def _embedding_collection_metadata(
+    runtime: EmbeddingRuntime,
+    description: str | None,
+) -> dict[str, Any]:
     metadata: dict[str, Any] = {
-        "embedding_provider": ACTIVE_EMBEDDING_PROVIDER,
-        "embedding_model": ACTIVE_EMBEDDING_MODEL_NAME,
-        "embedding_dimension": int(ACTIVE_EMBEDDING_DIMENSION),
+        "embedding_provider": runtime.provider,
+        "embedding_model": runtime.model_name,
+        "embedding_dimension": int(runtime.dimension),
     }
     if description:
         metadata["description"] = description
@@ -269,14 +347,17 @@ def _preserve_embedding_metadata(
     return merged
 
 
-def _validate_collection_embedding_metadata(collection: Any) -> None:
+def _validate_collection_embedding_metadata(
+    runtime: EmbeddingRuntime,
+    collection: Any,
+) -> None:
     metadata = collection.metadata or {}
     provider = metadata.get("embedding_provider")
     model = metadata.get("embedding_model")
     dimension = metadata.get("embedding_dimension")
 
     if provider is None and model is None and dimension is None:
-        if ACTIVE_EMBEDDING_PROVIDER == "local_sbert":
+        if runtime.provider == LOCAL_EMBEDDING_PROVIDER:
             return
         raise HTTPException(
             status_code=400,
@@ -287,9 +368,9 @@ def _validate_collection_embedding_metadata(collection: Any) -> None:
         )
 
     if (
-        str(provider) == ACTIVE_EMBEDDING_PROVIDER
-        and str(model) == ACTIVE_EMBEDDING_MODEL_NAME
-        and _metadata_dimension(dimension) == int(ACTIVE_EMBEDDING_DIMENSION)
+        str(provider) == runtime.provider
+        and str(model) == runtime.model_name
+        and _metadata_dimension(dimension) == int(runtime.dimension)
     ):
         return
 
@@ -313,7 +394,9 @@ def ingest_file_content(
     file_name: str,
     raw_content: bytes,
     requested_collection_name: str | None,
+    provider: str = LOCAL_EMBEDDING_PROVIDER,
 ) -> IngestResponse:
+    runtime = _runtime_for_provider(provider)
     extension = os.path.splitext(file_name)[1].casefold()
     if extension not in {".docx", ".pdf", ".txt", ".text"}:
         raise HTTPException(
@@ -323,17 +406,22 @@ def ingest_file_content(
 
     final_collection_name = _resolve_collection_name(file_name, requested_collection_name)
     file_hash = _content_hash(raw_content)
-    existing_names = {collection.name for collection in CHROMA_CLIENT.list_collections()}
+    existing_names = {
+        collection.name for collection in runtime.chroma_client.list_collections()
+    }
     if final_collection_name in existing_names:
-        collection = _get_collection_or_404(final_collection_name)
-        _validate_collection_embedding_metadata(collection)
+        collection = _get_collection_or_404(runtime, final_collection_name)
+        _validate_collection_embedding_metadata(runtime, collection)
     else:
-        collection = CHROMA_CLIENT.get_or_create_collection(
+        collection = runtime.chroma_client.get_or_create_collection(
             name=final_collection_name,
-            metadata=_embedding_collection_metadata(DEFAULT_COLLECTION_DESCRIPTION),
+            metadata=_embedding_collection_metadata(
+                runtime,
+                DEFAULT_COLLECTION_DESCRIPTION,
+            ),
         )
 
-    chunker = ProtonxSemanticChunker(model=EMBEDDING_MODEL)
+    chunker = ProtonxSemanticChunker(model=runtime.embedding_model)
     pending_records: list[dict[str, Any]] = []
     chunk_count = 0
     warnings: list[str] = []
@@ -379,7 +467,7 @@ def ingest_file_content(
         if len(pending_records) >= INGEST_BATCH_SIZE:
             chunk_count += add_records_to_collection(
                 pending_records,
-                EMBEDDING_MODEL,
+                runtime.embedding_model,
                 collection,
             )
             pending_records.clear()
@@ -387,7 +475,7 @@ def ingest_file_content(
     if pending_records:
         chunk_count += add_records_to_collection(
             pending_records,
-            EMBEDDING_MODEL,
+            runtime.embedding_model,
             collection,
         )
 
@@ -516,17 +604,22 @@ def _finalize_chunk_stats(stats: dict[str, Any], chunk_count: int) -> dict[str, 
     return stats
 
 
-def query_collection(collection_name: str, req: QueryRequest) -> QueryResponse:
+def query_collection(
+    collection_name: str,
+    req: QueryRequest,
+    provider: str = LOCAL_EMBEDDING_PROVIDER,
+) -> QueryResponse:
     if not req.query.strip():
         raise HTTPException(status_code=400, detail="Query must not be empty.")
 
-    collection = _get_collection_or_404(collection_name)
-    _validate_collection_embedding_metadata(collection)
+    runtime = _runtime_for_provider(provider)
+    collection = _get_collection_or_404(runtime, collection_name)
+    _validate_collection_embedding_metadata(runtime, collection)
     final_n = _resolve_final_docs_retrieval(req)
     rerank_llm = _build_optional_rerank_llm()
     try:
         metadatas, retrieved_data = vector_search(
-            EMBEDDING_MODEL,
+            runtime.embedding_model,
             req.query,
             collection,
             final_n,
@@ -616,9 +709,9 @@ def _build_query_prompt(query: str, retrieved_data: str) -> str:
     )
 
 
-def _get_collection_or_404(collection_name: str) -> Any:
+def _get_collection_or_404(runtime: EmbeddingRuntime, collection_name: str) -> Any:
     try:
-        return CHROMA_CLIENT.get_collection(name=collection_name)
+        return runtime.chroma_client.get_collection(name=collection_name)
     except Exception as exc:
         raise HTTPException(status_code=404, detail="Collection not found.") from exc
 

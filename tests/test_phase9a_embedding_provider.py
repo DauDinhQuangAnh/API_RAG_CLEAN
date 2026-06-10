@@ -227,6 +227,24 @@ class FakeCollection:
         }
 
 
+class FakeRuntime:
+    def __init__(
+        self,
+        provider="local_sbert",
+        model_name="fake-local",
+        dimension=384,
+        chroma_client=None,
+        embedding_model=None,
+        chroma_db_path="fake_db",
+    ):
+        self.provider = provider
+        self.model_name = model_name
+        self.dimension = dimension
+        self.chroma_client = chroma_client
+        self.embedding_model = embedding_model
+        self.chroma_db_path = chroma_db_path
+
+
 def test_add_records_to_collection_uses_document_embedding_path():
     from API_RAG_NEW.rag_pipeline import add_records_to_collection
 
@@ -306,18 +324,19 @@ def test_default_provider_env_resolves_to_local_sbert(monkeypatch):
 
 def test_gemini_mode_requires_api_key(monkeypatch):
     config = importlib.import_module("API_RAG_NEW.config")
-    monkeypatch.setattr(config, "RAG_EMBEDDING_PROVIDER", "gemini")
     monkeypatch.setattr(config, "get_gemini_api_key", lambda: None)
 
     with pytest.raises(RuntimeError, match="GEMINI_API_KEY"):
-        config.build_embedding_provider()
+        config.build_embedding_provider("gemini")
 
 
 def test_collection_metadata_validation(monkeypatch):
     services = importlib.import_module("API_RAG_NEW.services")
-    monkeypatch.setattr(services, "ACTIVE_EMBEDDING_PROVIDER", "gemini")
-    monkeypatch.setattr(services, "ACTIVE_EMBEDDING_MODEL_NAME", "gemini-embedding-2")
-    monkeypatch.setattr(services, "ACTIVE_EMBEDDING_DIMENSION", 768)
+    runtime = FakeRuntime(
+        provider="gemini",
+        model_name="gemini-embedding-2",
+        dimension=768,
+    )
 
     matching = FakeCollection(
         metadata={
@@ -326,7 +345,7 @@ def test_collection_metadata_validation(monkeypatch):
             "embedding_dimension": 768,
         }
     )
-    services._validate_collection_embedding_metadata(matching)
+    services._validate_collection_embedding_metadata(runtime, matching)
 
     mismatched = FakeCollection(
         metadata={
@@ -336,7 +355,7 @@ def test_collection_metadata_validation(monkeypatch):
         }
     )
     with pytest.raises(HTTPException) as exc_info:
-        services._validate_collection_embedding_metadata(mismatched)
+        services._validate_collection_embedding_metadata(runtime, mismatched)
     assert exc_info.value.status_code == 400
     assert "different embedding provider/model" in exc_info.value.detail
 
@@ -345,23 +364,25 @@ def test_legacy_collection_rules(monkeypatch):
     services = importlib.import_module("API_RAG_NEW.services")
 
     legacy = FakeCollection(metadata=None)
-    monkeypatch.setattr(services, "ACTIVE_EMBEDDING_PROVIDER", "local_sbert")
-    services._validate_collection_embedding_metadata(legacy)
+    local_runtime = FakeRuntime(provider="local_sbert")
+    services._validate_collection_embedding_metadata(local_runtime, legacy)
 
-    monkeypatch.setattr(services, "ACTIVE_EMBEDDING_PROVIDER", "gemini")
+    gemini_runtime = FakeRuntime(provider="gemini")
     with pytest.raises(HTTPException) as exc_info:
-        services._validate_collection_embedding_metadata(legacy)
+        services._validate_collection_embedding_metadata(gemini_runtime, legacy)
     assert exc_info.value.status_code == 400
     assert "no embedding metadata" in exc_info.value.detail
 
 
 def test_embedding_collection_metadata_contains_integer_dimension(monkeypatch):
     services = importlib.import_module("API_RAG_NEW.services")
-    monkeypatch.setattr(services, "ACTIVE_EMBEDDING_PROVIDER", "local_sbert")
-    monkeypatch.setattr(services, "ACTIVE_EMBEDDING_MODEL_NAME", "fake-local")
-    monkeypatch.setattr(services, "ACTIVE_EMBEDDING_DIMENSION", 384)
+    runtime = FakeRuntime(
+        provider="local_sbert",
+        model_name="fake-local",
+        dimension=384,
+    )
 
-    metadata = services._embedding_collection_metadata("desc")
+    metadata = services._embedding_collection_metadata(runtime, "desc")
 
     assert metadata == {
         "description": "desc",
@@ -396,10 +417,13 @@ def test_create_collection_writes_embedding_metadata(monkeypatch):
     services = importlib.import_module("API_RAG_NEW.services")
     schemas = importlib.import_module("API_RAG_NEW.schemas")
     client = FakeChromaClient()
-    monkeypatch.setattr(services, "CHROMA_CLIENT", client)
-    monkeypatch.setattr(services, "ACTIVE_EMBEDDING_PROVIDER", "local_sbert")
-    monkeypatch.setattr(services, "ACTIVE_EMBEDDING_MODEL_NAME", "fake-local")
-    monkeypatch.setattr(services, "ACTIVE_EMBEDDING_DIMENSION", 384)
+    runtime = FakeRuntime(
+        provider="local_sbert",
+        model_name="fake-local",
+        dimension=384,
+        chroma_client=client,
+    )
+    monkeypatch.setattr(services, "get_embedding_runtime", lambda provider: runtime)
 
     info = services.create_collection(
         schemas.CollectionCreateRequest(name="demo", description="desc")
@@ -426,7 +450,13 @@ def test_update_collection_preserves_embedding_metadata(monkeypatch):
             "embedding_dimension": 768,
         },
     )
-    monkeypatch.setattr(services, "CHROMA_CLIENT", FakeChromaClient([collection]))
+    runtime = FakeRuntime(
+        provider="gemini",
+        model_name="gemini-embedding-2",
+        dimension=768,
+        chroma_client=FakeChromaClient([collection]),
+    )
+    monkeypatch.setattr(services, "get_embedding_runtime", lambda provider: runtime)
 
     services.update_collection(
         "demo",
@@ -453,7 +483,13 @@ def test_update_collection_rejects_embedding_metadata_change(monkeypatch):
             "embedding_dimension": 768,
         },
     )
-    monkeypatch.setattr(services, "CHROMA_CLIENT", FakeChromaClient([collection]))
+    runtime = FakeRuntime(
+        provider="gemini",
+        model_name="gemini-embedding-2",
+        dimension=768,
+        chroma_client=FakeChromaClient([collection]),
+    )
+    monkeypatch.setattr(services, "get_embedding_runtime", lambda provider: runtime)
 
     with pytest.raises(HTTPException) as exc_info:
         services.update_collection(
@@ -475,15 +511,18 @@ def test_runtime_payloads_include_safe_embedding_fields(monkeypatch):
     services = importlib.import_module("API_RAG_NEW.services")
     monkeypatch.setenv("GEMINI_API_KEY", "secret-value")
     monkeypatch.setenv("RAG_INTERNAL_API_KEY", "internal-secret")
-    monkeypatch.setattr(services, "ACTIVE_EMBEDDING_PROVIDER", "gemini")
-    monkeypatch.setattr(services, "ACTIVE_EMBEDDING_MODEL_NAME", "gemini-embedding-2")
-    monkeypatch.setattr(services, "ACTIVE_EMBEDDING_DIMENSION", 768)
+    monkeypatch.setattr(services, "get_gemini_api_key", lambda: "secret-value")
 
     config_payload = services.runtime_config_payload()
     status_payload = services.runtime_status_payload()
     combined = f"{config_payload} {status_payload}"
 
-    assert config_payload["embedding_provider"] == "gemini"
-    assert status_payload["embedding_dimension"] == 768
+    assert config_payload["embedding_routes"]["root"] == "local_sbert"
+    assert config_payload["gemini_embedding"]["configured"] is True
+    assert status_payload["gemini_embedding"]["dimension"] in {768, 1536, 3072}
+    assert (
+        status_payload["gemini_embedding"]["dimension"]
+        == config_payload["gemini_embedding"]["dimension"]
+    )
     assert "secret-value" not in combined
     assert "internal-secret" not in combined
