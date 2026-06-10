@@ -88,15 +88,18 @@ async def _ingest_file_for_provider(
     provider: str,
     file: UploadFile,
     collection_name: str | None,
+    chunking_profile: str | None,
 ) -> IngestResponse:
     raw_content = await file.read()
     if not raw_content:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+    effective_chunking_profile = services.resolve_chunking_profile(chunking_profile)
     return services.ingest_file_content(
         file.filename or "upload.txt",
         raw_content,
         collection_name,
         provider=provider,
+        chunking_profile=effective_chunking_profile,
     )
 
 
@@ -188,8 +191,14 @@ def delete_collection(collection_name: str) -> dict[str, str]:
 async def ingest_file(
     file: UploadFile = File(...),
     collection_name: str | None = Form(None),
+    chunking_profile: str | None = Form(None),
 ) -> IngestResponse:
-    return await _ingest_file_for_provider(LOCAL_PROVIDER, file, collection_name)
+    return await _ingest_file_for_provider(
+        LOCAL_PROVIDER,
+        file,
+        collection_name,
+        chunking_profile,
+    )
 
 
 @app.post(
@@ -270,8 +279,14 @@ def delete_local_collection(collection_name: str) -> dict[str, str]:
 async def ingest_local_file(
     file: UploadFile = File(...),
     collection_name: str | None = Form(None),
+    chunking_profile: str | None = Form(None),
 ) -> IngestResponse:
-    return await _ingest_file_for_provider(LOCAL_PROVIDER, file, collection_name)
+    return await _ingest_file_for_provider(
+        LOCAL_PROVIDER,
+        file,
+        collection_name,
+        chunking_profile,
+    )
 
 
 @app.post(
@@ -356,11 +371,13 @@ def delete_gemini_collection(collection_name: str) -> dict[str, str]:
 async def ingest_gemini_file(
     file: UploadFile = File(...),
     collection_name: str | None = Form(None),
+    chunking_profile: str | None = Form(None),
 ) -> IngestResponse:
     return await _ingest_file_for_provider(
         GEMINI_EMBEDDING_PROVIDER,
         file,
         collection_name,
+        chunking_profile,
     )
 
 

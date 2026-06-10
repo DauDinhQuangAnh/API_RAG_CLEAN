@@ -382,13 +382,14 @@ def test_embedding_collection_metadata_contains_integer_dimension(monkeypatch):
         dimension=384,
     )
 
-    metadata = services._embedding_collection_metadata(runtime, "desc")
+    metadata = services._embedding_collection_metadata(runtime, "desc", "hybrid")
 
     assert metadata == {
         "description": "desc",
         "embedding_provider": "local_sbert",
         "embedding_model": "fake-local",
         "embedding_dimension": 384,
+        "chunking_profile": "hybrid",
     }
     assert isinstance(metadata["embedding_dimension"], int)
 
@@ -435,6 +436,7 @@ def test_create_collection_writes_embedding_metadata(monkeypatch):
         "embedding_provider": "local_sbert",
         "embedding_model": "fake-local",
         "embedding_dimension": 384,
+        "chunking_profile": "hybrid",
     }
 
 
@@ -448,6 +450,7 @@ def test_update_collection_preserves_embedding_metadata(monkeypatch):
             "embedding_provider": "gemini",
             "embedding_model": "gemini-embedding-2",
             "embedding_dimension": 768,
+            "chunking_profile": "semantic",
         },
     )
     runtime = FakeRuntime(
@@ -469,6 +472,7 @@ def test_update_collection_preserves_embedding_metadata(monkeypatch):
         "embedding_provider": "gemini",
         "embedding_model": "gemini-embedding-2",
         "embedding_dimension": 768,
+        "chunking_profile": "semantic",
     }
 
 
@@ -481,6 +485,7 @@ def test_update_collection_rejects_embedding_metadata_change(monkeypatch):
             "embedding_provider": "gemini",
             "embedding_model": "gemini-embedding-2",
             "embedding_dimension": 768,
+            "chunking_profile": "hybrid",
         },
     )
     runtime = FakeRuntime(
@@ -499,6 +504,7 @@ def test_update_collection_rejects_embedding_metadata_change(monkeypatch):
                     "embedding_provider": "local_sbert",
                     "embedding_model": "gemini-embedding-2",
                     "embedding_dimension": 768,
+                    "chunking_profile": "hybrid",
                 }
             ),
         )

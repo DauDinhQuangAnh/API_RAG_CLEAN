@@ -17,7 +17,7 @@ os.environ.setdefault("HF_HUB_OFFLINE", "1")
 class FakeCollection:
     def __init__(self, name="demo", metadata=None):
         self.name = name
-        self.metadata = metadata or {}
+        self.metadata = metadata
 
     def count(self):
         return 0
@@ -74,8 +74,14 @@ def test_root_and_local_ingest_use_local_provider(monkeypatch):
 
     calls = []
 
-    def fake_ingest(file_name, raw_content, collection_name, provider="local_sbert"):
-        calls.append(provider)
+    def fake_ingest(
+        file_name,
+        raw_content,
+        collection_name,
+        provider="local_sbert",
+        chunking_profile=None,
+    ):
+        calls.append((provider, chunking_profile))
         return IngestResponse(collection_name="demo", rows=1, chunks=1)
 
     monkeypatch.setattr(main.services, "ingest_file_content", fake_ingest)
@@ -89,7 +95,7 @@ def test_root_and_local_ingest_use_local_provider(monkeypatch):
         )
         assert response.status_code == 200
 
-    assert calls == ["local_sbert", "local_sbert"]
+    assert calls == [("local_sbert", "hybrid"), ("local_sbert", "hybrid")]
 
 
 def test_root_and_local_query_use_local_provider(monkeypatch):
@@ -127,8 +133,14 @@ def test_gemini_ingest_and_query_use_gemini_provider(monkeypatch):
     ingest_calls = []
     query_calls = []
 
-    def fake_ingest(file_name, raw_content, collection_name, provider="local_sbert"):
-        ingest_calls.append(provider)
+    def fake_ingest(
+        file_name,
+        raw_content,
+        collection_name,
+        provider="local_sbert",
+        chunking_profile=None,
+    ):
+        ingest_calls.append((provider, chunking_profile))
         return IngestResponse(collection_name="demo", rows=1, chunks=1)
 
     def fake_query(collection_name, req, provider="local_sbert"):
@@ -152,8 +164,64 @@ def test_gemini_ingest_and_query_use_gemini_provider(monkeypatch):
 
     assert ingest_response.status_code == 200
     assert query_response.status_code == 200
-    assert ingest_calls == ["gemini"]
+    assert ingest_calls == [("gemini", "hybrid")]
     assert query_calls == ["gemini"]
+
+
+def test_local_and_gemini_ingest_forward_chunking_profile(monkeypatch):
+    from API_RAG_NEW import main
+    from API_RAG_NEW.schemas import IngestResponse
+
+    calls = []
+
+    def fake_ingest(
+        file_name,
+        raw_content,
+        collection_name,
+        provider="local_sbert",
+        chunking_profile=None,
+    ):
+        calls.append((provider, chunking_profile))
+        return IngestResponse(collection_name="demo", rows=1, chunks=1)
+
+    monkeypatch.setattr(main.services, "ingest_file_content", fake_ingest)
+    client = _client()
+
+    local_response = client.post(
+        "/local/ingest",
+        files={"file": ("demo.txt", b"hello", "text/plain")},
+        data={"collection_name": "demo", "chunking_profile": "semantic"},
+    )
+    gemini_response = client.post(
+        "/gemini/ingest",
+        files={"file": ("demo.txt", b"hello", "text/plain")},
+        data={"collection_name": "demo", "chunking_profile": "hybrid"},
+    )
+
+    assert local_response.status_code == 200
+    assert gemini_response.status_code == 200
+    assert calls == [("local_sbert", "semantic"), ("gemini", "hybrid")]
+
+
+def test_invalid_chunking_profile_returns_http_400(monkeypatch):
+    from API_RAG_NEW import main
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("ingest service should not be called")
+
+    monkeypatch.setattr(main.services, "ingest_file_content", fail_if_called)
+    client = _client()
+
+    response = client.post(
+        "/local/ingest",
+        files={"file": ("demo.txt", b"hello", "text/plain")},
+        data={"collection_name": "demo", "chunking_profile": "bad"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "Invalid chunking_profile. Allowed values: hybrid, semantic."
+    )
 
 
 def test_gemini_routes_fail_without_key_but_local_routes_work(monkeypatch):
@@ -233,6 +301,104 @@ def test_collection_metadata_mismatch_returns_http_400():
         raise AssertionError("Expected HTTPException")
 
 
+def test_collection_metadata_includes_chunking_profile(monkeypatch):
+    from API_RAG_NEW import services
+    from API_RAG_NEW.schemas import CollectionCreateRequest
+
+    runtime = FakeRuntime("local_sbert")
+    monkeypatch.setattr(services, "get_embedding_runtime", lambda provider: runtime)
+
+    info = services.create_collection(
+        CollectionCreateRequest(name="chunked"),
+        provider="local_sbert",
+    )
+
+    assert info.metadata["chunking_profile"] == "hybrid"
+
+
+def test_appending_with_different_chunking_profile_returns_http_400(monkeypatch):
+    from API_RAG_NEW import services
+
+    runtime = FakeRuntime("local_sbert")
+    runtime.chroma_client.collections["demo"] = FakeCollection(
+        name="demo",
+        metadata={
+            "embedding_provider": "local_sbert",
+            "embedding_model": "keepitreal/vietnamese-sbert",
+            "embedding_dimension": 768,
+            "chunking_profile": "hybrid",
+        },
+    )
+    monkeypatch.setattr(services, "get_embedding_runtime", lambda provider: runtime)
+
+    try:
+        services.ingest_file_content(
+            "demo.txt",
+            b"hello",
+            "demo",
+            provider="local_sbert",
+            chunking_profile="semantic",
+        )
+    except HTTPException as exc:
+        assert exc.status_code == 400
+        assert "different chunking_profile" in exc.detail
+    else:
+        raise AssertionError("Expected HTTPException")
+
+
+def test_legacy_local_collection_allows_ingest_without_chunking_metadata(monkeypatch):
+    from API_RAG_NEW import services
+
+    runtime = FakeRuntime("local_sbert")
+    runtime.chroma_client.collections["legacy"] = FakeCollection(
+        name="legacy",
+        metadata=None,
+    )
+    monkeypatch.setattr(services, "get_embedding_runtime", lambda provider: runtime)
+    monkeypatch.setattr(services, "_build_ingest_records", lambda *args, **kwargs: (1, [], {}))
+
+    try:
+        services.ingest_file_content(
+            "demo.txt",
+            b"hello",
+            "legacy",
+            provider="local_sbert",
+            chunking_profile="semantic",
+        )
+    except HTTPException as exc:
+        assert exc.status_code == 400
+        assert exc.detail == "No valid text to chunk."
+    else:
+        raise AssertionError("Expected no valid text HTTPException")
+
+
+def test_query_endpoints_do_not_forward_chunking_profile(monkeypatch):
+    from API_RAG_NEW import main
+    from API_RAG_NEW.schemas import QueryResponse
+
+    calls = []
+
+    def fake_query(collection_name, req, provider="local_sbert"):
+        calls.append((provider, req.query))
+        return QueryResponse(
+            metadatas=[],
+            retrieved_data="",
+            answer="ok",
+            full_prompt="prompt",
+        )
+
+    monkeypatch.setattr(main.services, "query_collection", fake_query)
+    client = _client()
+
+    response = client.post(
+        "/local/collections/demo/query",
+        json={"query": "hello", "chunking_profile": "semantic"},
+    )
+
+    assert response.status_code == 200
+    assert calls == [("local_sbert", "hello")]
+
+
 def test_runtime_payloads_expose_dual_provider_info_safely(monkeypatch):
     from API_RAG_NEW import services
 
@@ -250,6 +416,9 @@ def test_runtime_payloads_expose_dual_provider_info_safely(monkeypatch):
     assert config_payload["local_embedding"]["provider"] == "local_sbert"
     assert config_payload["gemini_embedding"]["provider"] == "gemini"
     assert config_payload["gemini_embedding"]["configured"] is False
+    assert config_payload["available_chunking_profiles"] == ["hybrid", "semantic"]
+    assert config_payload["default_chunking_profile"] in {"hybrid", "semantic"}
     assert status_payload["gemini_embedding"]["configured"] is False
+    assert status_payload["available_chunking_profiles"] == ["hybrid", "semantic"]
     assert "GEMINI_API_KEY" not in combined
     assert "RAG_INTERNAL_API_KEY" not in combined

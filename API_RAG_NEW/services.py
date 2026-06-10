@@ -88,6 +88,8 @@ FINAL_ANSWER_FALLBACK_MESSAGE = (
     "Hệ thống AI đang quá tải hoặc tạm thời không thể tạo câu trả lời. "
     "Vui lòng thử lại sau ít phút."
 )
+ALLOWED_CHUNKING_PROFILES = {"hybrid", "semantic"}
+CHUNKING_PROFILE_ERROR = "Invalid chunking_profile. Allowed values: hybrid, semantic."
 
 
 def health_payload() -> dict[str, str]:
@@ -121,6 +123,19 @@ def _runtime_payload(runtime: EmbeddingRuntime) -> dict[str, object]:
     }
 
 
+def resolve_chunking_profile(chunking_profile: str | None = None) -> str:
+    selected = (
+        str(chunking_profile).strip().casefold()
+        if chunking_profile is not None
+        else RAG_CHUNKING_PROFILE
+    )
+    if not selected:
+        selected = RAG_CHUNKING_PROFILE
+    if selected not in ALLOWED_CHUNKING_PROFILES:
+        raise HTTPException(status_code=400, detail=CHUNKING_PROFILE_ERROR)
+    return selected
+
+
 def _gemini_runtime_payload() -> dict[str, object]:
     return {
         "provider": GEMINI_PROVIDER,
@@ -136,6 +151,8 @@ def runtime_config_payload() -> dict[str, object]:
         "rag_initial_top_k": RAG_INITIAL_TOP_K,
         "rag_final_top_n": RAG_FINAL_TOP_N,
         "rag_chunking_profile": RAG_CHUNKING_PROFILE,
+        "available_chunking_profiles": ["hybrid", "semantic"],
+        "default_chunking_profile": RAG_CHUNKING_PROFILE,
         "rag_include_neighbors": RAG_INCLUDE_NEIGHBORS,
         "rag_reranker_type": RAG_RERANKER_TYPE,
         "rag_max_context_expansion_per_candidate": (
@@ -177,6 +194,8 @@ def runtime_status_payload() -> dict[str, object]:
     return {
         "health": health_payload(),
         "concurrency": concurrency_status_payload(),
+        "available_chunking_profiles": ["hybrid", "semantic"],
+        "default_chunking_profile": RAG_CHUNKING_PROFILE,
         "embedding_routes": {
             "root": LOCAL_EMBEDDING_PROVIDER,
             "local": LOCAL_EMBEDDING_PROVIDER,
@@ -286,7 +305,10 @@ def update_collection(
             requested_metadata,
         )
 
-    collection.modify(name=new_name, metadata=new_metadata)
+    if new_metadata is None:
+        collection.modify(name=new_name)
+    else:
+        collection.modify(name=new_name, metadata=new_metadata)
     return _to_collection_info(
         _get_collection_or_404(runtime, new_name or collection_name)
     )
@@ -306,11 +328,13 @@ def delete_collection(
 def _embedding_collection_metadata(
     runtime: EmbeddingRuntime,
     description: str | None,
+    chunking_profile: str | None = None,
 ) -> dict[str, Any]:
     metadata: dict[str, Any] = {
         "embedding_provider": runtime.provider,
         "embedding_model": runtime.model_name,
         "embedding_dimension": int(runtime.dimension),
+        "chunking_profile": chunking_profile or RAG_CHUNKING_PROFILE,
     }
     if description:
         metadata["description"] = description
@@ -321,7 +345,12 @@ def _ensure_embedding_metadata_not_changed(
     current_metadata: dict[str, Any],
     requested_metadata: dict[str, Any],
 ) -> None:
-    for key in ("embedding_provider", "embedding_model", "embedding_dimension"):
+    for key in (
+        "embedding_provider",
+        "embedding_model",
+        "embedding_dimension",
+        "chunking_profile",
+    ):
         if key not in requested_metadata:
             continue
         if key not in current_metadata:
@@ -341,7 +370,12 @@ def _preserve_embedding_metadata(
     requested_metadata: dict[str, Any],
 ) -> dict[str, Any]:
     merged = dict(requested_metadata)
-    for key in ("embedding_provider", "embedding_model", "embedding_dimension"):
+    for key in (
+        "embedding_provider",
+        "embedding_model",
+        "embedding_dimension",
+        "chunking_profile",
+    ):
         if key in current_metadata:
             merged[key] = current_metadata[key]
     return merged
@@ -383,6 +417,25 @@ def _validate_collection_embedding_metadata(
     )
 
 
+def _validate_collection_chunking_profile(
+    collection: Any,
+    effective_chunking_profile: str,
+) -> None:
+    metadata = collection.metadata or {}
+    existing_profile = metadata.get("chunking_profile")
+    if existing_profile is None:
+        return
+    if str(existing_profile).strip().casefold() == effective_chunking_profile:
+        return
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            "Collection was created with a different chunking_profile. "
+            "Please create a new collection or re-ingest documents."
+        ),
+    )
+
+
 def _metadata_dimension(value: Any) -> int | None:
     try:
         return int(value)
@@ -395,8 +448,10 @@ def ingest_file_content(
     raw_content: bytes,
     requested_collection_name: str | None,
     provider: str = LOCAL_EMBEDDING_PROVIDER,
+    chunking_profile: str | None = None,
 ) -> IngestResponse:
     runtime = _runtime_for_provider(provider)
+    effective_chunking_profile = resolve_chunking_profile(chunking_profile)
     extension = os.path.splitext(file_name)[1].casefold()
     if extension not in {".docx", ".pdf", ".txt", ".text"}:
         raise HTTPException(
@@ -412,12 +467,14 @@ def ingest_file_content(
     if final_collection_name in existing_names:
         collection = _get_collection_or_404(runtime, final_collection_name)
         _validate_collection_embedding_metadata(runtime, collection)
+        _validate_collection_chunking_profile(collection, effective_chunking_profile)
     else:
         collection = runtime.chroma_client.get_or_create_collection(
             name=final_collection_name,
             metadata=_embedding_collection_metadata(
                 runtime,
                 DEFAULT_COLLECTION_DESCRIPTION,
+                effective_chunking_profile,
             ),
         )
 
@@ -425,7 +482,7 @@ def ingest_file_content(
     pending_records: list[dict[str, Any]] = []
     chunk_count = 0
     warnings: list[str] = []
-    requested_profile = RAG_CHUNKING_PROFILE
+    requested_profile = effective_chunking_profile
     effective_profile = requested_profile
     chunk_stats = _new_chunk_stats(effective_profile)
 
