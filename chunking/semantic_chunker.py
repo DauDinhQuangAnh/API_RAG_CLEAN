@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import nltk
+import numpy as np
 import re
-from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
 
 from .base_chunker import BaseChunker
 
@@ -39,7 +38,12 @@ class ProtonxSemanticChunker(BaseChunker):
         self.threshold = threshold
         self.min_chunk_chars = min_chunk_chars
         self.max_chunk_chars = max_chunk_chars
-        self.model = SentenceTransformer(model) if isinstance(model, str) else model
+        if isinstance(model, str):
+            from download_model import ensure_embedding_model
+
+            self.model = ensure_embedding_model(preferred_model=model)[0]
+        else:
+            self.model = model
         _ensure_tokenizers()
 
     def embed_function(self, sentences):
@@ -54,7 +58,7 @@ class ProtonxSemanticChunker(BaseChunker):
             return sentences
 
         vectors = self.embed_function(sentences)
-        similarities = cosine_similarity(vectors)
+        similarities = _cosine_similarity(vectors)
         chunks = [[sentences[0]]]
 
         for i in range(1, len(sentences)):
@@ -179,3 +183,13 @@ class ProtonxSemanticChunker(BaseChunker):
         if current:
             parts.append(current)
         return parts
+
+
+def _cosine_similarity(vectors):
+    matrix = np.asarray(vectors, dtype=float)
+    if matrix.ndim == 1:
+        matrix = matrix.reshape(1, -1)
+    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    normalized = matrix / norms
+    return normalized @ normalized.T
