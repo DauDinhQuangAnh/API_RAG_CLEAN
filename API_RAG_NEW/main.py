@@ -4,7 +4,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFi
 from fastapi.middleware.cors import CORSMiddleware
 
 from API_RAG_NEW import services
-from API_RAG_NEW.concurrency import acquire_query_slot
+from API_RAG_NEW.concurrency import acquire_ingest_slot, acquire_query_slot
 from API_RAG_NEW.config import ALLOWED_ORIGINS, ROOT_PATH
 from API_RAG_NEW.security import require_internal_api_key
 from API_RAG_NEW.schemas import (
@@ -90,17 +90,18 @@ async def _ingest_file_for_provider(
     collection_name: str | None,
     chunking_profile: str | None,
 ) -> IngestResponse:
-    raw_content = await file.read()
-    if not raw_content:
-        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
-    effective_chunking_profile = services.resolve_chunking_profile(chunking_profile)
-    return services.ingest_file_content(
-        file.filename or "upload.txt",
-        raw_content,
-        collection_name,
-        provider=provider,
-        chunking_profile=effective_chunking_profile,
-    )
+    with acquire_ingest_slot():
+        raw_content = await file.read()
+        if not raw_content:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+        effective_chunking_profile = services.resolve_chunking_profile(chunking_profile)
+        return services.ingest_file_content(
+            file.filename or "upload.txt",
+            raw_content,
+            collection_name,
+            provider=provider,
+            chunking_profile=effective_chunking_profile,
+        )
 
 
 def _query_collection_for_provider(

@@ -8,6 +8,9 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Sequence
 
+from fastapi import HTTPException
+
+from API_RAG_NEW.concurrency import acquire_embedding_slot
 from API_RAG_NEW.embeddings import encode_documents, encode_queries
 from API_RAG_NEW.reranker import rerank_candidate_ids
 
@@ -64,13 +67,16 @@ def add_records_to_collection(
     try:
         documents = [str(record["chunk"]) for record in records]
         titles = [_record_embedding_title(record) for record in records]
-        embeddings = encode_documents(model, documents, titles=titles)
+        with acquire_embedding_slot():
+            embeddings = encode_documents(model, documents, titles=titles)
         collection.upsert(
             ids=[_resolve_record_id(record) for record in records],
             embeddings=embeddings,
             documents=documents,
             metadatas=[sanitize_metadata(record) for record in records],
         )
+    except HTTPException:
+        raise
     except AttributeError as exc:
         if "encode" in str(exc):
             raise RuntimeError(
@@ -163,6 +169,7 @@ def vector_search(
     include_neighbors: bool = False,
     reranker_type: str = "none",
     rerank_llm: Any | None = None,
+    rerank_llm_factory: Any | None = None,
     max_context_expansion_per_candidate: int = 3,
     max_total_candidates: int = 40,
     enable_distance_guard: bool = False,
@@ -171,7 +178,8 @@ def vector_search(
     final_n = max(1, int(number_docs_retrieval))
     initial_n = max(final_n, int(initial_top_k or final_n))
     query_hints = detect_query_hints(query)
-    query_embeddings = encode_queries(model, [query])
+    with acquire_embedding_slot():
+        query_embeddings = encode_queries(model, [query])
     search_results = collection.query(
         query_embeddings=query_embeddings,
         n_results=initial_n,
@@ -204,6 +212,7 @@ def vector_search(
         final_n,
         reranker_type=reranker_type,
         rerank_llm=rerank_llm,
+        rerank_llm_factory=rerank_llm_factory,
         query_hints=query_hints,
     )
     final_metadatas = [chunk.metadata for chunk in ranked_chunks]
@@ -578,15 +587,23 @@ def _rank_chunks(
     *,
     reranker_type: str,
     rerank_llm: Any | None,
+    rerank_llm_factory: Any | None = None,
     query_hints: dict[str, bool] | None = None,
 ) -> list[RetrievedChunk]:
     original_order = list(candidates)
-    if reranker_type.casefold() == "llm" and rerank_llm is not None:
+    if reranker_type.casefold() == "llm":
+        active_rerank_llm = rerank_llm
+        if active_rerank_llm is None and callable(rerank_llm_factory):
+            active_rerank_llm = rerank_llm_factory()
+    else:
+        active_rerank_llm = None
+
+    if active_rerank_llm is not None:
         ranked_ids = rerank_candidate_ids(
             query,
             original_order,
             final_n,
-            rerank_llm,
+            active_rerank_llm,
             query_hints=query_hints,
         )
     else:

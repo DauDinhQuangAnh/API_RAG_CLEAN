@@ -339,6 +339,7 @@ def test_collection_metadata_validation(monkeypatch):
     )
 
     matching = FakeCollection(
+        name="gemini.demo",
         metadata={
             "embedding_provider": "gemini",
             "embedding_model": "gemini-embedding-2",
@@ -539,3 +540,104 @@ def test_runtime_payloads_include_safe_embedding_fields(monkeypatch):
     )
     assert "secret-value" not in combined
     assert "internal-secret" not in combined
+
+
+class StatusError(Exception):
+    def __init__(self, status_code, message):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class RetryGeminiModels:
+    def __init__(self, failures):
+        self.failures = list(failures)
+        self.calls = 0
+
+    def embed_content(self, *, model, contents, config):
+        self.calls += 1
+        if self.failures:
+            raise self.failures.pop(0)
+        return FakeEmbedResponse([FakeEmbedding([1.0, 2.0])])
+
+
+class RetryGeminiClient:
+    def __init__(self, failures):
+        self.models = RetryGeminiModels(failures)
+
+
+def test_gemini_embedding_transient_error_retries_then_succeeds(monkeypatch):
+    from API_RAG_NEW.embeddings import GeminiTextEmbeddings
+
+    monkeypatch.setattr("API_RAG_NEW.embeddings.time.sleep", lambda delay: None)
+    client = RetryGeminiClient(
+        [
+            StatusError(503, "service unavailable"),
+            StatusError(429, "rate limit"),
+        ]
+    )
+    provider = GeminiTextEmbeddings(
+        api_key="fake",
+        model_name="gemini-embedding-2",
+        output_dimensionality=768,
+        task="question answering",
+        batch_size=32,
+        max_retries=3,
+        retry_base_seconds=0,
+        retry_max_seconds=0,
+        client=client,
+    )
+
+    assert provider.encode_queries(["hello"]) == [[1.0, 2.0]]
+    assert client.models.calls == 3
+
+
+def test_gemini_embedding_permanent_error_does_not_retry(monkeypatch):
+    from API_RAG_NEW.embeddings import GeminiTextEmbeddings
+
+    monkeypatch.setattr("API_RAG_NEW.embeddings.time.sleep", lambda delay: None)
+    client = RetryGeminiClient([StatusError(400, "invalid request shape")])
+    provider = GeminiTextEmbeddings(
+        api_key="fake",
+        model_name="bad-model",
+        output_dimensionality=768,
+        task="question answering",
+        batch_size=32,
+        max_retries=3,
+        retry_base_seconds=0,
+        retry_max_seconds=0,
+        client=client,
+    )
+
+    with pytest.raises(RuntimeError, match="Gemini embedding request failed."):
+        provider.encode_queries(["hello"])
+
+    assert client.models.calls == 1
+
+
+def test_gemini_embedding_retry_exhaustion_reports_clear_failure(monkeypatch):
+    from API_RAG_NEW.embeddings import GeminiTextEmbeddings
+
+    monkeypatch.setattr("API_RAG_NEW.embeddings.time.sleep", lambda delay: None)
+    client = RetryGeminiClient(
+        [
+            StatusError(503, "service unavailable"),
+            StatusError(503, "service unavailable"),
+            StatusError(503, "service unavailable"),
+        ]
+    )
+    provider = GeminiTextEmbeddings(
+        api_key="fake",
+        model_name="gemini-embedding-2",
+        output_dimensionality=768,
+        task="question answering",
+        batch_size=32,
+        max_retries=3,
+        retry_base_seconds=0,
+        retry_max_seconds=0,
+        client=client,
+    )
+
+    with pytest.raises(RuntimeError, match="failed after 3 attempts"):
+        provider.encode_queries(["hello"])
+
+    assert client.models.calls == 3

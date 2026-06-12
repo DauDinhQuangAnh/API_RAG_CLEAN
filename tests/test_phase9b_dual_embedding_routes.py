@@ -6,6 +6,7 @@ from pathlib import Path
 
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,15 +16,16 @@ os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
 
 class FakeCollection:
-    def __init__(self, name="demo", metadata=None, owner=None):
+    def __init__(self, name="demo", metadata=None, owner=None, count_value=0):
         self.name = name
         self.metadata = metadata
         self.upserts = []
         self.modify_calls = []
         self._owner = owner
+        self.count_value = count_value
 
     def count(self):
-        return 0
+        return self.count_value
 
     def modify(self, name=None, metadata=None):
         self.modify_calls.append({"name": name, "metadata": metadata})
@@ -37,6 +39,7 @@ class FakeCollection:
 
     def upsert(self, **kwargs):
         self.upserts.append(kwargs)
+        self.count_value += len(kwargs.get("ids") or [])
 
 
 class FakeChromaClient:
@@ -708,3 +711,389 @@ def test_runtime_payloads_expose_dual_provider_info_safely(monkeypatch):
     assert status_payload["available_chunking_profiles"] == ["hybrid", "semantic"]
     assert "GEMINI_API_KEY" not in combined
     assert "RAG_INTERNAL_API_KEY" not in combined
+
+
+def test_gemini_collections_exclude_legacy_raw_name_gemini(monkeypatch):
+    from API_RAG_NEW import services
+
+    shared_client = FakeChromaClient()
+    shared_client.collections["bv_yhct"] = FakeCollection(
+        name="bv_yhct",
+        metadata={
+            "logical_collection_name": "bv_yhct",
+            "storage_collection_name": "bv_yhct",
+            "embedding_provider": "gemini",
+            "embedding_model": "gemini-embedding-2",
+            "embedding_dimension": 768,
+        },
+    )
+    shared_client.collections["gemini.bv_yhct"] = FakeCollection(
+        name="gemini.bv_yhct",
+        metadata={
+            "logical_collection_name": "bv_yhct",
+            "storage_collection_name": "gemini.bv_yhct",
+            "embedding_provider": "gemini",
+            "embedding_model": "gemini-embedding-2",
+            "embedding_dimension": 768,
+        },
+    )
+    runtime = FakeRuntime("gemini", chroma_client=shared_client)
+    monkeypatch.setattr(services, "get_embedding_runtime", lambda provider: runtime)
+
+    assert services.list_collections(provider="gemini") == {
+        "collections": ["bv_yhct"]
+    }
+
+
+def test_local_collections_exclude_gemini_storage_prefix(monkeypatch):
+    from API_RAG_NEW import services
+
+    shared_client = FakeChromaClient()
+    shared_client.collections["gemini.bv_yhct"] = FakeCollection(
+        name="gemini.bv_yhct",
+        metadata=None,
+    )
+    shared_client.collections["local_docs"] = FakeCollection(
+        name="local_docs",
+        metadata=None,
+    )
+    runtime = FakeRuntime("local_sbert", chroma_client=shared_client)
+    monkeypatch.setattr(services, "get_embedding_runtime", lambda provider: runtime)
+
+    assert services.list_collections(provider="local_sbert") == {
+        "collections": ["local_docs"]
+    }
+
+
+@pytest.mark.parametrize("provider", ["local_sbert", "gemini"])
+def test_create_collection_rejects_reserved_public_prefix(monkeypatch, provider):
+    from API_RAG_NEW import services
+    from API_RAG_NEW.schemas import CollectionCreateRequest
+
+    runtime = FakeRuntime(provider)
+    monkeypatch.setattr(services, "get_embedding_runtime", lambda requested: runtime)
+
+    with pytest.raises(HTTPException) as exc_info:
+        services.create_collection(
+            CollectionCreateRequest(name="gemini.bv_yhct"),
+            provider=provider,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == services.RESERVED_COLLECTION_PREFIX_ERROR
+
+
+@pytest.mark.parametrize("provider", ["local_sbert", "gemini"])
+def test_rename_collection_rejects_reserved_public_prefix(monkeypatch, provider):
+    from API_RAG_NEW import services
+    from API_RAG_NEW.schemas import CollectionUpdateRequest
+
+    storage_name = "demo" if provider == "local_sbert" else "gemini.demo"
+    runtime = FakeRuntime(provider)
+    runtime.chroma_client.collections[storage_name] = FakeCollection(
+        name=storage_name,
+        metadata={
+            "logical_collection_name": "demo",
+            "storage_collection_name": storage_name,
+            "embedding_provider": provider,
+            "embedding_model": runtime.model_name,
+            "embedding_dimension": 768,
+        },
+    )
+    monkeypatch.setattr(services, "get_embedding_runtime", lambda requested: runtime)
+
+    with pytest.raises(HTTPException) as exc_info:
+        services.update_collection(
+            "demo",
+            CollectionUpdateRequest(new_name="gemini.bv_yhct"),
+            provider=provider,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == services.RESERVED_COLLECTION_PREFIX_ERROR
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/ingest", "/local/ingest", "/gemini/ingest"],
+)
+def test_ingest_routes_reject_reserved_public_prefix(monkeypatch, path):
+    from API_RAG_NEW import services
+
+    runtimes = {
+        "local_sbert": FakeRuntime("local_sbert"),
+        "gemini": FakeRuntime("gemini"),
+    }
+    monkeypatch.setattr(services, "get_embedding_runtime", lambda provider: runtimes[provider])
+    client = _client()
+
+    response = client.post(
+        path,
+        files={"file": ("demo.txt", b"hello", "text/plain")},
+        data={"collection_name": "gemini.bv_yhct"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == services.RESERVED_COLLECTION_PREFIX_ERROR
+
+
+def test_create_gemini_logical_name_uses_gemini_storage(monkeypatch):
+    from API_RAG_NEW import services
+    from API_RAG_NEW.schemas import CollectionCreateRequest
+
+    runtime = FakeRuntime("gemini")
+    monkeypatch.setattr(services, "get_embedding_runtime", lambda provider: runtime)
+
+    info = services.create_collection(
+        CollectionCreateRequest(name="bv_yhct"),
+        provider="gemini",
+    )
+
+    assert info.name == "bv_yhct"
+    assert "gemini.bv_yhct" in runtime.chroma_client.collections
+
+
+def test_ingest_failure_rolls_back_new_empty_collection(monkeypatch):
+    from API_RAG_NEW import services
+
+    runtime = FakeRuntime("local_sbert")
+    monkeypatch.setattr(services, "get_embedding_runtime", lambda provider: runtime)
+    monkeypatch.setattr(
+        services,
+        "_build_ingest_records",
+        lambda *args, **kwargs: (_ for _ in ()).throw(HTTPException(400, "bad file")),
+    )
+
+    with pytest.raises(HTTPException):
+        services.ingest_file_content(
+            "demo.txt",
+            b"hello",
+            "newdocs",
+            provider="local_sbert",
+            chunking_profile="semantic",
+        )
+
+    assert "newdocs" not in runtime.chroma_client.collections
+    assert runtime.chroma_client.deleted == ["newdocs"]
+
+
+def test_ingest_failure_preserves_existing_collection(monkeypatch):
+    from API_RAG_NEW import services
+
+    runtime = FakeRuntime("local_sbert")
+    runtime.chroma_client.collections["existing"] = FakeCollection(
+        name="existing",
+        metadata={
+            "logical_collection_name": "existing",
+            "storage_collection_name": "existing",
+            "embedding_provider": "local_sbert",
+            "embedding_model": runtime.model_name,
+            "embedding_dimension": 768,
+        },
+    )
+    monkeypatch.setattr(services, "get_embedding_runtime", lambda provider: runtime)
+    monkeypatch.setattr(
+        services,
+        "_build_ingest_records",
+        lambda *args, **kwargs: (_ for _ in ()).throw(HTTPException(400, "bad file")),
+    )
+
+    with pytest.raises(HTTPException):
+        services.ingest_file_content(
+            "demo.txt",
+            b"hello",
+            "existing",
+            provider="local_sbert",
+            chunking_profile="semantic",
+        )
+
+    assert "existing" in runtime.chroma_client.collections
+    assert runtime.chroma_client.deleted == []
+
+
+def test_successful_ingest_keeps_new_collection(monkeypatch):
+    from API_RAG_NEW import services
+
+    runtime = FakeRuntime("local_sbert")
+    monkeypatch.setattr(services, "get_embedding_runtime", lambda provider: runtime)
+    monkeypatch.setattr(
+        services,
+        "_build_ingest_records",
+        lambda *args, **kwargs: (1, [{"id": "r1", "chunk": "hello"}], {}),
+    )
+    monkeypatch.setattr(
+        services,
+        "add_records_to_collection",
+        lambda records, model, collection: collection.upsert(
+            ids=[record["id"] for record in records]
+        )
+        or len(records),
+    )
+
+    response = services.ingest_file_content(
+        "demo.txt",
+        b"hello",
+        "newdocs",
+        provider="local_sbert",
+        chunking_profile="semantic",
+    )
+
+    assert response.chunks == 1
+    assert "newdocs" in runtime.chroma_client.collections
+    assert runtime.chroma_client.deleted == []
+
+
+def test_query_no_context_does_not_build_answer_llm(monkeypatch):
+    from API_RAG_NEW import services
+    from API_RAG_NEW.schemas import QueryRequest
+
+    runtime = FakeRuntime("local_sbert")
+    runtime.chroma_client.collections["demo"] = FakeCollection(
+        name="demo",
+        metadata={
+            "logical_collection_name": "demo",
+            "storage_collection_name": "demo",
+            "embedding_provider": "local_sbert",
+            "embedding_model": runtime.model_name,
+            "embedding_dimension": 768,
+        },
+    )
+    monkeypatch.setattr(services, "get_embedding_runtime", lambda provider: runtime)
+    monkeypatch.setattr(services, "vector_search", lambda *args, **kwargs: ([[]], ""))
+    monkeypatch.setattr(
+        services,
+        "_build_llm",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("LLM called")),
+    )
+
+    response = services.query_collection(
+        "demo",
+        QueryRequest(query="hello"),
+        provider="local_sbert",
+    )
+
+    assert response.answer == services.NO_CONTEXT_ANSWER_MESSAGE
+    assert response.citations == []
+
+
+def test_query_usable_text_with_missing_metadata_calls_answer_llm(monkeypatch):
+    from API_RAG_NEW import services
+    from API_RAG_NEW.schemas import QueryRequest
+
+    runtime = FakeRuntime("local_sbert")
+    runtime.chroma_client.collections["demo"] = FakeCollection(
+        name="demo",
+        metadata={
+            "logical_collection_name": "demo",
+            "storage_collection_name": "demo",
+            "embedding_provider": "local_sbert",
+            "embedding_model": runtime.model_name,
+            "embedding_dimension": 768,
+        },
+    )
+    monkeypatch.setattr(services, "get_embedding_runtime", lambda provider: runtime)
+    monkeypatch.setattr(
+        services,
+        "vector_search",
+        lambda *args, **kwargs: ([[]], "chunk: usable text"),
+    )
+
+    class FakeLLM:
+        def generate_content(self, prompt):
+            return "answer"
+
+    monkeypatch.setattr(services, "_build_llm", lambda *args, **kwargs: FakeLLM())
+
+    response = services.query_collection(
+        "demo",
+        QueryRequest(query="hello"),
+        provider="local_sbert",
+    )
+
+    assert response.answer == "answer"
+    assert response.retrieved_data == "chunk: usable text"
+
+
+def test_runtime_payloads_include_ingest_and_embedding_concurrency():
+    from API_RAG_NEW import services
+
+    config_payload = services.runtime_config_payload()
+    status_payload = services.runtime_status_payload()
+
+    for key in ("query", "llm", "ingest", "embedding"):
+        assert key in config_payload["concurrency"]
+        assert key in status_payload["concurrency"]
+        for field in ("limit", "active", "available", "rejected"):
+            assert field in config_payload["concurrency"][key]
+            assert field in status_payload["concurrency"][key]
+
+    assert "rag_max_concurrent_ingests" in config_payload
+    assert "rag_max_concurrent_embedding_calls" in config_payload
+
+
+def test_slot_limiter_queues_then_returns_configured_error_on_timeout():
+    from API_RAG_NEW.concurrency import SlotLimiter
+
+    limiter = SlotLimiter(1)
+    with limiter.acquire(
+        timeout=0,
+        error_factory=lambda: HTTPException(status_code=503, detail="busy"),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            with limiter.acquire(
+                timeout=0,
+                error_factory=lambda: HTTPException(status_code=503, detail="busy"),
+            ):
+                pass
+
+    assert exc_info.value.status_code == 503
+    assert limiter.snapshot()["rejected"] == 1
+
+
+def test_internal_api_key_dev_mode_without_key_allows_access(monkeypatch):
+    from API_RAG_NEW import security
+    from API_RAG_NEW.main import app
+
+    app.dependency_overrides = {}
+    monkeypatch.setattr(security, "RAG_INTERNAL_API_KEY", None)
+    monkeypatch.setattr(security, "RAG_REQUIRE_INTERNAL_API_KEY", False)
+    client = TestClient(app)
+
+    response = client.get("/health")
+    assert response.status_code == 200
+    protected_response = client.get("/collections")
+    assert protected_response.status_code in {200, 400}
+
+
+def test_internal_api_key_require_mode_without_key_blocks(monkeypatch):
+    from API_RAG_NEW import security
+    from API_RAG_NEW.main import app
+
+    app.dependency_overrides = {}
+    monkeypatch.setattr(security, "RAG_INTERNAL_API_KEY", None)
+    monkeypatch.setattr(security, "RAG_REQUIRE_INTERNAL_API_KEY", True)
+    client = TestClient(app)
+
+    response = client.get("/collections")
+
+    assert response.status_code == 500
+    assert "RAG_INTERNAL_API_KEY must be configured" in response.json()["detail"]
+
+
+def test_internal_api_key_require_mode_valid_and_wrong_key(monkeypatch):
+    from API_RAG_NEW import security
+    from API_RAG_NEW.main import app
+
+    app.dependency_overrides = {}
+    monkeypatch.setattr(security, "RAG_INTERNAL_API_KEY", "secret")
+    monkeypatch.setattr(security, "RAG_REQUIRE_INTERNAL_API_KEY", True)
+    client = TestClient(app)
+
+    wrong_response = client.get("/collections", headers={"X-Internal-API-Key": "bad"})
+    valid_response = client.get(
+        "/collections",
+        headers={"X-Internal-API-Key": "secret"},
+    )
+
+    assert wrong_response.status_code == 401
+    assert valid_response.status_code in {200, 400}

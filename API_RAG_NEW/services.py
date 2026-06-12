@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import hashlib
+import logging
 import os
 import re
 import unicodedata
@@ -35,15 +36,22 @@ from API_RAG_NEW.config import (
     RAG_CHUNKING_PROFILE,
     RAG_ENABLE_DISTANCE_GUARD,
     RAG_EMBEDDING_PROVIDER,
+    RAG_EMBEDDING_QUEUE_TIMEOUT_SECONDS,
     RAG_GEMINI_EMBEDDING_BATCH_SIZE,
     RAG_GEMINI_EMBEDDING_DIMENSION,
+    RAG_GEMINI_EMBEDDING_MAX_RETRIES,
     RAG_GEMINI_EMBEDDING_MODEL,
+    RAG_GEMINI_EMBEDDING_RETRY_BASE_SECONDS,
+    RAG_GEMINI_EMBEDDING_RETRY_MAX_SECONDS,
     RAG_GEMINI_EMBEDDING_TASK,
+    RAG_INGEST_QUEUE_TIMEOUT_SECONDS,
     RAG_INCLUDE_NEIGHBORS,
     RAG_INITIAL_TOP_K,
     RAG_INTERNAL_API_KEY,
     RAG_LOCAL_EMBEDDING_MODEL,
     RAG_LLM_QUEUE_TIMEOUT_SECONDS,
+    RAG_MAX_CONCURRENT_EMBEDDING_CALLS,
+    RAG_MAX_CONCURRENT_INGESTS,
     RAG_MAX_CONCURRENT_LLM_CALLS,
     RAG_MAX_CONCURRENT_QUERIES,
     RAG_MAX_CONTEXT_EXPANSION_PER_CANDIDATE,
@@ -91,7 +99,14 @@ FINAL_ANSWER_FALLBACK_MESSAGE = (
 ALLOWED_CHUNKING_PROFILES = {"hybrid", "semantic"}
 CHUNKING_PROFILE_ERROR = "Invalid chunking_profile. Allowed values: hybrid, semantic."
 GEMINI_STORAGE_PREFIX = f"{GEMINI_PROVIDER}."
+NO_CONTEXT_ANSWER_MESSAGE = (
+    "Hiện tài liệu chưa cung cấp đủ thông tin để trả lời chính xác câu hỏi này."
+)
+RESERVED_COLLECTION_PREFIX_ERROR = (
+    "Collection name prefix 'gemini.' is reserved for internal storage."
+)
 STORAGE_NAME_HASH_LENGTH = 12
+logger = logging.getLogger(__name__)
 
 
 def health_payload() -> dict[str, str]:
@@ -223,8 +238,12 @@ def runtime_config_payload() -> dict[str, object]:
         "rag_internal_api_key_enabled": bool(RAG_INTERNAL_API_KEY),
         "rag_max_concurrent_queries": RAG_MAX_CONCURRENT_QUERIES,
         "rag_max_concurrent_llm_calls": RAG_MAX_CONCURRENT_LLM_CALLS,
+        "rag_max_concurrent_ingests": RAG_MAX_CONCURRENT_INGESTS,
+        "rag_max_concurrent_embedding_calls": RAG_MAX_CONCURRENT_EMBEDDING_CALLS,
         "rag_query_queue_timeout_seconds": RAG_QUERY_QUEUE_TIMEOUT_SECONDS,
         "rag_llm_queue_timeout_seconds": RAG_LLM_QUEUE_TIMEOUT_SECONDS,
+        "rag_ingest_queue_timeout_seconds": RAG_INGEST_QUEUE_TIMEOUT_SECONDS,
+        "rag_embedding_queue_timeout_seconds": RAG_EMBEDDING_QUEUE_TIMEOUT_SECONDS,
         "rag_enable_final_answer_fallback": RAG_ENABLE_FINAL_ANSWER_FALLBACK,
         "concurrency": concurrency_status_payload(),
         "gemini_model": GEMINI_MODEL,
@@ -242,6 +261,13 @@ def runtime_config_payload() -> dict[str, object]:
         "rag_gemini_embedding_dimension": RAG_GEMINI_EMBEDDING_DIMENSION,
         "rag_gemini_embedding_task": RAG_GEMINI_EMBEDDING_TASK,
         "rag_gemini_embedding_batch_size": RAG_GEMINI_EMBEDDING_BATCH_SIZE,
+        "rag_gemini_embedding_max_retries": RAG_GEMINI_EMBEDDING_MAX_RETRIES,
+        "rag_gemini_embedding_retry_base_seconds": (
+            RAG_GEMINI_EMBEDDING_RETRY_BASE_SECONDS
+        ),
+        "rag_gemini_embedding_retry_max_seconds": (
+            RAG_GEMINI_EMBEDDING_RETRY_MAX_SECONDS
+        ),
         "chroma_db_path": CHROMA_DB_PATH,
         "chroma_db_path_local": CHROMA_DB_PATH_LOCAL,
         "chroma_db_path_gemini": CHROMA_DB_PATH_GEMINI,
@@ -547,15 +573,23 @@ def _collection_matches_runtime_metadata(
     collection: Any,
 ) -> bool:
     metadata = collection.metadata or {}
+    collection_name = str(collection.name)
+    storage_metadata = metadata.get("storage_collection_name")
+    if storage_metadata is not None and str(storage_metadata) != collection_name:
+        return False
+
+    if runtime.provider == GEMINI_PROVIDER:
+        if not collection_name.startswith(GEMINI_STORAGE_PREFIX):
+            return False
+    elif collection_name.startswith(GEMINI_STORAGE_PREFIX):
+        return False
+
     provider = metadata.get("embedding_provider")
     model = metadata.get("embedding_model")
     dimension = metadata.get("embedding_dimension")
 
     if provider is None and model is None and dimension is None:
-        return (
-            runtime.provider == LOCAL_EMBEDDING_PROVIDER
-            and not collection.name.startswith(GEMINI_STORAGE_PREFIX)
-        )
+        return runtime.provider == LOCAL_EMBEDDING_PROVIDER
 
     return (
         str(provider) == runtime.provider
@@ -616,6 +650,8 @@ def _clean_logical_collection_name(name: str) -> str:
     cleaned_name = clean_collection_name(name)
     if not cleaned_name:
         raise HTTPException(status_code=400, detail="Invalid collection name.")
+    if cleaned_name.casefold().startswith(GEMINI_STORAGE_PREFIX):
+        raise HTTPException(status_code=400, detail=RESERVED_COLLECTION_PREFIX_ERROR)
     return cleaned_name
 
 
@@ -638,6 +674,7 @@ def ingest_file_content(
     final_collection_name = _resolve_collection_name(file_name, requested_collection_name)
     final_storage_name = storage_collection_name(runtime.provider, final_collection_name)
     file_hash = _content_hash(raw_content)
+    collection_created = False
     existing_names = {
         collection.name for collection in runtime.chroma_client.list_collections()
     }
@@ -654,6 +691,7 @@ def ingest_file_content(
                 storage_name=final_storage_name,
             ),
         )
+        collection_created = True
 
     chunker = ProtonxSemanticChunker(model=runtime.embedding_model)
     pending_records: list[dict[str, Any]] = []
@@ -664,70 +702,120 @@ def ingest_file_content(
     chunk_stats = _new_chunk_stats(effective_profile)
 
     try:
-        source_count, records, build_stats = _build_ingest_records(
-            extension,
-            raw_content,
-            file_name,
-            file_hash,
-            chunker,
-            requested_profile,
-        )
-        _merge_chunk_stats(chunk_stats, build_stats)
-        if requested_profile == "hybrid":
-            records = list(records)
-    except Exception as exc:
-        if requested_profile != "hybrid":
-            raise
-        warning = (
-            "Hybrid chunking failed; fell back to semantic chunking: "
-            f"{exc}"
-        )
-        warnings.append(warning)
-        effective_profile = "semantic"
-        chunk_stats = _new_chunk_stats(effective_profile)
-        source_count, records, build_stats = _build_ingest_records(
-            extension,
-            raw_content,
-            file_name,
-            file_hash,
-            chunker,
-            effective_profile,
-        )
-        _merge_chunk_stats(chunk_stats, build_stats)
+        try:
+            source_count, records, build_stats = _build_ingest_records(
+                extension,
+                raw_content,
+                file_name,
+                file_hash,
+                chunker,
+                requested_profile,
+            )
+            _merge_chunk_stats(chunk_stats, build_stats)
+            if requested_profile == "hybrid":
+                records = list(records)
+        except Exception as exc:
+            if requested_profile != "hybrid":
+                raise
+            warning = (
+                "Hybrid chunking failed; fell back to semantic chunking: "
+                f"{exc}"
+            )
+            warnings.append(warning)
+            effective_profile = "semantic"
+            chunk_stats = _new_chunk_stats(effective_profile)
+            source_count, records, build_stats = _build_ingest_records(
+                extension,
+                raw_content,
+                file_name,
+                file_hash,
+                chunker,
+                effective_profile,
+            )
+            _merge_chunk_stats(chunk_stats, build_stats)
 
-    _validate_collection_chunking_profile(collection, effective_profile)
+        _validate_collection_chunking_profile(collection, effective_profile)
 
-    for record in records:
-        _update_chunk_stats(chunk_stats, record)
-        pending_records.append(record)
-        if len(pending_records) >= INGEST_BATCH_SIZE:
+        for record in records:
+            _update_chunk_stats(chunk_stats, record)
+            pending_records.append(record)
+            if len(pending_records) >= INGEST_BATCH_SIZE:
+                chunk_count += add_records_to_collection(
+                    pending_records,
+                    runtime.embedding_model,
+                    collection,
+                )
+                pending_records.clear()
+
+        if pending_records:
             chunk_count += add_records_to_collection(
                 pending_records,
                 runtime.embedding_model,
                 collection,
             )
-            pending_records.clear()
 
-    if pending_records:
-        chunk_count += add_records_to_collection(
-            pending_records,
-            runtime.embedding_model,
-            collection,
+        if chunk_count == 0:
+            raise HTTPException(status_code=400, detail="No valid text to chunk.")
+
+        _set_collection_chunking_profile(collection, runtime, effective_profile)
+
+        return IngestResponse(
+            collection_name=final_collection_name,
+            rows=source_count,
+            chunks=chunk_count,
+            warnings=warnings,
+            chunking_profile=effective_profile,
+            chunk_stats=_finalize_chunk_stats(chunk_stats, chunk_count),
         )
+    except Exception:
+        _rollback_new_empty_collection(
+            runtime,
+            final_storage_name,
+            collection,
+            collection_created=collection_created,
+            chunks_added=chunk_count,
+        )
+        raise
 
-    if chunk_count == 0:
-        raise HTTPException(status_code=400, detail="No valid text to chunk.")
 
-    _set_collection_chunking_profile(collection, runtime, effective_profile)
+def _rollback_new_empty_collection(
+    runtime: EmbeddingRuntime,
+    storage_name: str,
+    collection: Any,
+    *,
+    collection_created: bool,
+    chunks_added: int,
+) -> None:
+    if not collection_created or chunks_added > 0:
+        return
 
-    return IngestResponse(
-        collection_name=final_collection_name,
-        rows=source_count,
-        chunks=chunk_count,
-        warnings=warnings,
-        chunking_profile=effective_profile,
-        chunk_stats=_finalize_chunk_stats(chunk_stats, chunk_count),
-    )
+    try:
+        current_count = int(collection.count())
+    except Exception as exc:
+        logger.warning(
+            "Skipping ingest rollback for %s because collection count failed: %s",
+            storage_name,
+            exc,
+        )
+        return
+
+    if current_count != 0:
+        logger.info(
+            "Skipping ingest rollback for %s because collection count is %s.",
+            storage_name,
+            current_count,
+        )
+        return
+
+    try:
+        logger.warning("Rolling back newly created empty collection %s.", storage_name)
+        runtime.chroma_client.delete_collection(name=storage_name)
+    except Exception as exc:
+        logger.warning(
+            "Failed to roll back newly created empty collection %s: %s",
+            storage_name,
+            exc,
+        )
 
 
 def _build_ingest_records(
@@ -855,7 +943,6 @@ def query_collection(
     collection = _get_collection_or_404(runtime, storage_name)
     _validate_collection_embedding_metadata(runtime, collection)
     final_n = _resolve_final_docs_retrieval(req)
-    rerank_llm = _build_optional_rerank_llm()
     try:
         metadatas, retrieved_data = vector_search(
             runtime.embedding_model,
@@ -865,7 +952,7 @@ def query_collection(
             initial_top_k=RAG_INITIAL_TOP_K,
             include_neighbors=RAG_INCLUDE_NEIGHBORS,
             reranker_type=RAG_RERANKER_TYPE,
-            rerank_llm=rerank_llm,
+            rerank_llm_factory=_build_optional_rerank_llm,
             max_context_expansion_per_candidate=(
                 RAG_MAX_CONTEXT_EXPANSION_PER_CANDIDATE
             ),
@@ -878,6 +965,15 @@ def query_collection(
     final_metadatas = metadatas[0] if metadatas else []
     citations = build_citations_from_metadatas(final_metadatas)
     full_prompt = _build_query_prompt(req.query, retrieved_data)
+    if not str(retrieved_data or "").strip():
+        return QueryResponse(
+            metadatas=metadatas,
+            retrieved_data=retrieved_data,
+            answer=NO_CONTEXT_ANSWER_MESSAGE,
+            full_prompt=full_prompt,
+            citations=[],
+        )
+
     answer_llm = _build_llm()
     try:
         answer = answer_llm.generate_content(full_prompt)
@@ -984,10 +1080,15 @@ def _resolve_collection_name(
     file_name: str, requested_collection_name: str | None
 ) -> str:
     if requested_collection_name:
-        cleaned_name = clean_collection_name(requested_collection_name)
-        if not cleaned_name:
-            raise HTTPException(status_code=400, detail="Invalid collection_name.")
-        return cleaned_name
+        try:
+            return _clean_logical_collection_name(requested_collection_name)
+        except HTTPException as exc:
+            if exc.detail == "Invalid collection name.":
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid collection_name.",
+                ) from exc
+            raise
 
     base_name = clean_collection_name(os.path.splitext(file_name)[0]) or "rag_collection"
     return f"rag_collection_{base_name}_{uuid.uuid4().hex[:6]}"

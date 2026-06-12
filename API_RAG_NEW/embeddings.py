@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+import time
 from typing import Any, Protocol
 
 from google import genai
@@ -40,6 +41,9 @@ class GeminiTextEmbeddings:
         output_dimensionality: int,
         task: str,
         batch_size: int,
+        max_retries: int = 3,
+        retry_base_seconds: float = 1.0,
+        retry_max_seconds: float = 8.0,
         client: Any | None = None,
     ):
         self.client = client or genai.Client(api_key=api_key)
@@ -47,6 +51,12 @@ class GeminiTextEmbeddings:
         self.dimension = int(output_dimensionality)
         self.task = task
         self.batch_size = max(1, int(batch_size))
+        self.max_retries = max(1, int(max_retries))
+        self.retry_base_seconds = max(0.0, float(retry_base_seconds))
+        self.retry_max_seconds = max(
+            self.retry_base_seconds,
+            float(retry_max_seconds),
+        )
 
     def encode(self, texts: Sequence[str]) -> list[list[float]]:
         return self.encode_documents(texts)
@@ -87,14 +97,7 @@ class GeminiTextEmbeddings:
         return vectors
 
     def _embed_one(self, text: str) -> list[float]:
-        try:
-            response = self.client.models.embed_content(
-                model=self.model_name,
-                contents=text,
-                config=types.EmbedContentConfig(output_dimensionality=self.dimension),
-            )
-        except Exception as exc:
-            raise RuntimeError("Gemini embedding request failed.") from exc
+        response = self._embed_one_with_retry(text)
 
         embeddings = _extract_gemini_embeddings(response)
         vectors = _to_float_vectors(embeddings)
@@ -106,6 +109,33 @@ class GeminiTextEmbeddings:
         if not vector:
             raise RuntimeError("Gemini embedding returned an empty vector.")
         return vector
+
+    def _embed_one_with_retry(self, text: str) -> Any:
+        last_error: Exception | None = None
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                return self.client.models.embed_content(
+                    model=self.model_name,
+                    contents=text,
+                    config=types.EmbedContentConfig(
+                        output_dimensionality=self.dimension
+                    ),
+                )
+            except Exception as exc:
+                last_error = exc
+                if not _is_transient_gemini_embedding_error(exc):
+                    raise RuntimeError("Gemini embedding request failed.") from exc
+                if attempt >= self.max_retries:
+                    break
+                time.sleep(self._retry_delay(attempt))
+
+        raise RuntimeError(
+            f"Gemini embedding request failed after {self.max_retries} attempts."
+        ) from last_error
+
+    def _retry_delay(self, attempt: int) -> float:
+        delay = self.retry_base_seconds * (2 ** max(0, attempt - 1))
+        return min(delay, self.retry_max_seconds)
 
 
 def encode_documents(
@@ -168,6 +198,78 @@ def _extract_gemini_embeddings(response: Any) -> Any:
             return [response["embedding"]]
 
     raise RuntimeError("Gemini embedding response did not include embeddings.")
+
+
+def _is_transient_gemini_embedding_error(exc: Exception) -> bool:
+    status_code = _error_status_code(exc)
+    if status_code in {408, 409, 429, 500, 502, 503, 504}:
+        return True
+    if status_code in {400, 401, 403, 404}:
+        return False
+
+    text = f"{type(exc).__name__} {exc}".casefold()
+    permanent_markers = (
+        "api key",
+        "apikey",
+        "unauthorized",
+        "permission denied",
+        "permission_denied",
+        "invalid argument",
+        "invalid_argument",
+        "invalid request",
+        "bad request",
+        "not found",
+        "invalid model",
+        "model not found",
+    )
+    if any(marker in text for marker in permanent_markers):
+        return False
+
+    transient_markers = (
+        "rate limit",
+        "ratelimit",
+        "resource exhausted",
+        "resource_exhausted",
+        "quota",
+        "temporarily exhausted",
+        "timeout",
+        "timed out",
+        "deadline",
+        "deadline_exceeded",
+        "unavailable",
+        "internal server",
+        "server error",
+        "connection reset",
+        "connection aborted",
+        "connection error",
+        "reset by peer",
+        "temporarily unavailable",
+        "503",
+        "500",
+        "502",
+        "504",
+        "429",
+    )
+    return any(marker in text for marker in transient_markers)
+
+
+def _error_status_code(exc: Exception) -> int | None:
+    for attr in ("status_code", "code"):
+        value = getattr(exc, attr, None)
+        try:
+            if value is not None:
+                return int(value)
+        except (TypeError, ValueError):
+            pass
+
+    response = getattr(exc, "response", None)
+    value = getattr(response, "status_code", None)
+    try:
+        if value is not None:
+            return int(value)
+    except (TypeError, ValueError):
+        return None
+    return None
 
 
 def _to_float_vectors(embeddings: Any) -> list[list[float]]:

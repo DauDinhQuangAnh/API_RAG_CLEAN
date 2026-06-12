@@ -7,7 +7,11 @@ from typing import Callable, Iterator
 from fastapi import HTTPException
 
 from API_RAG_NEW.config import (
+    RAG_EMBEDDING_QUEUE_TIMEOUT_SECONDS,
+    RAG_INGEST_QUEUE_TIMEOUT_SECONDS,
     RAG_LLM_QUEUE_TIMEOUT_SECONDS,
+    RAG_MAX_CONCURRENT_EMBEDDING_CALLS,
+    RAG_MAX_CONCURRENT_INGESTS,
     RAG_MAX_CONCURRENT_LLM_CALLS,
     RAG_MAX_CONCURRENT_QUERIES,
     RAG_QUERY_QUEUE_TIMEOUT_SECONDS,
@@ -63,6 +67,8 @@ class SlotLimiter:
 # capacity is workers * limit; each worker also loads its own embedding model.
 _query_limiter = SlotLimiter(RAG_MAX_CONCURRENT_QUERIES)
 _llm_limiter = SlotLimiter(RAG_MAX_CONCURRENT_LLM_CALLS)
+_ingest_limiter = SlotLimiter(RAG_MAX_CONCURRENT_INGESTS)
+_embedding_limiter = SlotLimiter(RAG_MAX_CONCURRENT_EMBEDDING_CALLS)
 
 
 @contextmanager
@@ -88,8 +94,34 @@ def acquire_llm_slot(timeout: float | None = None) -> Iterator[None]:
         yield
 
 
+@contextmanager
+def acquire_ingest_slot(timeout: float | None = None) -> Iterator[None]:
+    with _ingest_limiter.acquire(
+        timeout=RAG_INGEST_QUEUE_TIMEOUT_SECONDS if timeout is None else timeout,
+        error_factory=lambda: HTTPException(
+            status_code=503,
+            detail="RAG ingest server is busy. Please try again later.",
+        ),
+    ):
+        yield
+
+
+@contextmanager
+def acquire_embedding_slot(timeout: float | None = None) -> Iterator[None]:
+    with _embedding_limiter.acquire(
+        timeout=RAG_EMBEDDING_QUEUE_TIMEOUT_SECONDS if timeout is None else timeout,
+        error_factory=lambda: HTTPException(
+            status_code=503,
+            detail="RAG embedding server is busy. Please try again later.",
+        ),
+    ):
+        yield
+
+
 def concurrency_status_payload() -> dict[str, object]:
     return {
         "query": _query_limiter.snapshot(),
         "llm": _llm_limiter.snapshot(),
+        "ingest": _ingest_limiter.snapshot(),
+        "embedding": _embedding_limiter.snapshot(),
     }
