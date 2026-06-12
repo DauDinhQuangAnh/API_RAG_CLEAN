@@ -30,7 +30,6 @@ from API_RAG_NEW.config import (
     GEMINI_RERANKER_MODEL,
     INGEST_BATCH_SIZE,
     LOCAL_EMBEDDING_PROVIDER,
-    LOCAL_EMBEDDING_RUNTIME,
     RAG_ENABLE_FINAL_ANSWER_FALLBACK,
     RAG_FINAL_TOP_N,
     RAG_CHUNKING_PROFILE,
@@ -48,6 +47,7 @@ from API_RAG_NEW.config import (
     RAG_INCLUDE_NEIGHBORS,
     RAG_INITIAL_TOP_K,
     RAG_INTERNAL_API_KEY,
+    RAG_LOCAL_EMBEDDING_DIMENSION,
     RAG_LOCAL_EMBEDDING_MODEL,
     RAG_LLM_QUEUE_TIMEOUT_SECONDS,
     RAG_MAX_CONCURRENT_EMBEDDING_CALLS,
@@ -59,6 +59,7 @@ from API_RAG_NEW.config import (
     RAG_MAX_TOTAL_CANDIDATES,
     RAG_QUERY_QUEUE_TIMEOUT_SECONDS,
     RAG_RERANKER_TYPE,
+    get_cached_embedding_runtime,
     get_embedding_runtime,
     get_gemini_api_key,
 )
@@ -197,6 +198,19 @@ def _runtime_payload(runtime: EmbeddingRuntime) -> dict[str, object]:
     }
 
 
+def _local_runtime_payload() -> dict[str, object]:
+    runtime = get_cached_embedding_runtime(LOCAL_EMBEDDING_PROVIDER)
+    if runtime is not None:
+        return _runtime_payload(runtime)
+
+    return {
+        "provider": LOCAL_EMBEDDING_PROVIDER,
+        "model_name": RAG_LOCAL_EMBEDDING_MODEL,
+        "dimension": RAG_LOCAL_EMBEDDING_DIMENSION,
+        "chroma_db_path": CHROMA_DB_PATH_LOCAL,
+    }
+
+
 def resolve_chunking_profile(chunking_profile: str | None = None) -> str:
     selected = (
         str(chunking_profile).strip().casefold()
@@ -253,7 +267,7 @@ def runtime_config_payload() -> dict[str, object]:
             "local": LOCAL_EMBEDDING_PROVIDER,
             "gemini": GEMINI_PROVIDER,
         },
-        "local_embedding": _runtime_payload(LOCAL_EMBEDDING_RUNTIME),
+        "local_embedding": _local_runtime_payload(),
         "gemini_embedding": _gemini_runtime_payload(),
         "rag_embedding_provider": RAG_EMBEDDING_PROVIDER,
         "rag_local_embedding_model": RAG_LOCAL_EMBEDDING_MODEL,
@@ -286,7 +300,7 @@ def runtime_status_payload() -> dict[str, object]:
             "local": LOCAL_EMBEDDING_PROVIDER,
             "gemini": GEMINI_PROVIDER,
         },
-        "local_embedding": _runtime_payload(LOCAL_EMBEDDING_RUNTIME),
+        "local_embedding": _local_runtime_payload(),
         "gemini_embedding": _gemini_runtime_payload(),
         "gemini_model": GEMINI_MODEL,
         "gemini_reranker_model": GEMINI_RERANKER_MODEL,

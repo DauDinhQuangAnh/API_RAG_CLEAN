@@ -152,6 +152,10 @@ RAG_LOCAL_EMBEDDING_MODEL = os.getenv(
     "RAG_LOCAL_EMBEDDING_MODEL",
     PRIMARY_MODEL_NAME,
 )
+RAG_LOCAL_EMBEDDING_DIMENSION = max(
+    1,
+    get_int_env("RAG_LOCAL_EMBEDDING_DIMENSION", 768),
+)
 RAG_GEMINI_EMBEDDING_MODEL = os.getenv(
     "RAG_GEMINI_EMBEDDING_MODEL",
     "gemini-embedding-2",
@@ -263,4 +267,11 @@ def get_embedding_runtime(provider: EmbeddingProviderName) -> EmbeddingRuntime:
     raise RuntimeError(f"Unsupported embedding provider: {provider}")
 
 
-LOCAL_EMBEDDING_RUNTIME = get_embedding_runtime(LOCAL_EMBEDDING_PROVIDER)
+def get_cached_embedding_runtime(
+    provider: EmbeddingProviderName,
+) -> EmbeddingRuntime | None:
+    if provider == LOCAL_EMBEDDING_PROVIDER:
+        return _LOCAL_RUNTIME
+    if provider == GEMINI_PROVIDER:
+        return _GEMINI_RUNTIME
+    raise RuntimeError(f"Unsupported embedding provider: {provider}")

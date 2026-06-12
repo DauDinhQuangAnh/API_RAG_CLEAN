@@ -1,13 +1,13 @@
-sentence_transformers
 chromadb
 fastapi
 uvicorn
 python-multipart
 google-genai
 numpy
+transformers
+torch
 pdfplumber
 python-docx
-scikit-learn
 backoff
 nltk
 python-dotenv
