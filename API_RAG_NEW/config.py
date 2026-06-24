@@ -7,22 +7,17 @@ from typing import Literal
 import chromadb
 from dotenv import load_dotenv
 
-from API_RAG_NEW.embeddings import (
-    GeminiTextEmbeddings,
-    LocalSentenceTransformerEmbeddings,
-)
+from API_RAG_NEW.embeddings import LocalSentenceTransformerEmbeddings
 from download_model import PRIMARY_MODEL_NAME, ensure_embedding_model
 
 
 load_dotenv()
 
 
-GEMINI_PROVIDER = "gemini"
 LOCAL_EMBEDDING_PROVIDER = "local_sbert"
 DEFAULT_COLLECTION_DESCRIPTION = "A collection for RAG system"
 INGEST_BATCH_SIZE = 256
-SUPPORTED_GEMINI_EMBEDDING_DIMENSIONS = {768, 1536, 3072}
-EmbeddingProviderName = Literal["local_sbert", "gemini"]
+EmbeddingProviderName = Literal["local_sbert"]
 
 
 @dataclass(frozen=True)
@@ -86,16 +81,10 @@ def get_choice_env(name: str, default: str, supported_values: set[str]) -> str:
     return normalized if normalized in supported_values else default
 
 
-def get_gemini_embedding_dimension_env(name: str, default: int) -> int:
-    value = get_int_env(name, default)
-    return value if value in SUPPORTED_GEMINI_EMBEDDING_DIMENSIONS else default
-
-
 ROOT_PATH = os.getenv("ROOT_PATH", "").strip()
 ALLOWED_ORIGINS = parse_cors_origins(os.getenv("RAG_CORS_ORIGINS"))
 CHROMA_DB_PATH = os.getenv("CHROMA_DB_PATH", "db")
 CHROMA_DB_PATH_LOCAL = os.getenv("CHROMA_DB_PATH_LOCAL", CHROMA_DB_PATH)
-CHROMA_DB_PATH_GEMINI = os.getenv("CHROMA_DB_PATH_GEMINI", CHROMA_DB_PATH)
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 GEMINI_RERANKER_MODEL = os.getenv("GEMINI_RERANKER_MODEL") or GEMINI_MODEL
 RAG_INITIAL_TOP_K = get_int_env("RAG_INITIAL_TOP_K", 20)
@@ -143,11 +132,6 @@ RAG_CHUNKING_PROFILE = get_choice_env(
     "hybrid",
     {"semantic", "hybrid"},
 )
-RAG_EMBEDDING_PROVIDER = get_choice_env(
-    "RAG_EMBEDDING_PROVIDER",
-    "local_sbert",
-    {"local_sbert", "gemini"},
-)
 RAG_LOCAL_EMBEDDING_MODEL = os.getenv(
     "RAG_LOCAL_EMBEDDING_MODEL",
     PRIMARY_MODEL_NAME,
@@ -155,34 +139,6 @@ RAG_LOCAL_EMBEDDING_MODEL = os.getenv(
 RAG_LOCAL_EMBEDDING_DIMENSION = max(
     1,
     get_int_env("RAG_LOCAL_EMBEDDING_DIMENSION", 768),
-)
-RAG_GEMINI_EMBEDDING_MODEL = os.getenv(
-    "RAG_GEMINI_EMBEDDING_MODEL",
-    "gemini-embedding-2",
-)
-RAG_GEMINI_EMBEDDING_DIMENSION = get_gemini_embedding_dimension_env(
-    "RAG_GEMINI_EMBEDDING_DIMENSION",
-    768,
-)
-RAG_GEMINI_EMBEDDING_TASK = (
-    os.getenv("RAG_GEMINI_EMBEDDING_TASK", "question answering").strip()
-    or "question answering"
-)
-RAG_GEMINI_EMBEDDING_BATCH_SIZE = max(
-    1,
-    min(get_int_env("RAG_GEMINI_EMBEDDING_BATCH_SIZE", 32), 128),
-)
-RAG_GEMINI_EMBEDDING_MAX_RETRIES = max(
-    1,
-    get_int_env("RAG_GEMINI_EMBEDDING_MAX_RETRIES", 3),
-)
-RAG_GEMINI_EMBEDDING_RETRY_BASE_SECONDS = get_float_env(
-    "RAG_GEMINI_EMBEDDING_RETRY_BASE_SECONDS",
-    1.0,
-)
-RAG_GEMINI_EMBEDDING_RETRY_MAX_SECONDS = get_float_env(
-    "RAG_GEMINI_EMBEDDING_RETRY_MAX_SECONDS",
-    8.0,
 )
 RAG_DEBUG_MODE = get_bool_env("RAG_DEBUG_MODE", False)
 RAG_EMBEDDING_CACHE_SIZE = max(0, get_int_env("RAG_EMBEDDING_CACHE_SIZE", 1000))
@@ -203,35 +159,7 @@ def build_local_embedding_provider() -> LocalSentenceTransformerEmbeddings:
     return LocalSentenceTransformerEmbeddings(local_model, active_model_name)
 
 
-def build_gemini_embedding_provider() -> GeminiTextEmbeddings:
-    api_key = get_gemini_api_key()
-    if not api_key:
-        raise RuntimeError(
-            "GEMINI_API_KEY must be configured for Gemini embedding routes."
-        )
-    return GeminiTextEmbeddings(
-        api_key=api_key,
-        model_name=RAG_GEMINI_EMBEDDING_MODEL,
-        output_dimensionality=RAG_GEMINI_EMBEDDING_DIMENSION,
-        task=RAG_GEMINI_EMBEDDING_TASK,
-        batch_size=RAG_GEMINI_EMBEDDING_BATCH_SIZE,
-        max_retries=RAG_GEMINI_EMBEDDING_MAX_RETRIES,
-        retry_base_seconds=RAG_GEMINI_EMBEDDING_RETRY_BASE_SECONDS,
-        retry_max_seconds=RAG_GEMINI_EMBEDDING_RETRY_MAX_SECONDS,
-    )
-
-
-def build_embedding_provider(provider: EmbeddingProviderName | None = None):
-    selected_provider = provider or RAG_EMBEDDING_PROVIDER
-    if selected_provider == LOCAL_EMBEDDING_PROVIDER:
-        return build_local_embedding_provider()
-    if selected_provider == GEMINI_PROVIDER:
-        return build_gemini_embedding_provider()
-    raise RuntimeError(f"Unsupported embedding provider: {selected_provider}")
-
-
 _LOCAL_RUNTIME: EmbeddingRuntime | None = None
-_GEMINI_RUNTIME: EmbeddingRuntime | None = None
 _CHROMA_CLIENTS: dict[str, chromadb.PersistentClient] = {}
 
 
@@ -242,7 +170,7 @@ def _get_chroma_client(db_path: str) -> chromadb.PersistentClient:
 
 
 def get_embedding_runtime(provider: EmbeddingProviderName) -> EmbeddingRuntime:
-    global _LOCAL_RUNTIME, _GEMINI_RUNTIME
+    global _LOCAL_RUNTIME
 
     if provider == LOCAL_EMBEDDING_PROVIDER:
         if _LOCAL_RUNTIME is None:
@@ -257,19 +185,6 @@ def get_embedding_runtime(provider: EmbeddingProviderName) -> EmbeddingRuntime:
             )
         return _LOCAL_RUNTIME
 
-    if provider == GEMINI_PROVIDER:
-        if _GEMINI_RUNTIME is None:
-            embedding_model = build_gemini_embedding_provider()
-            _GEMINI_RUNTIME = EmbeddingRuntime(
-                provider=embedding_model.provider,
-                model_name=embedding_model.model_name,
-                dimension=int(embedding_model.dimension),
-                embedding_model=embedding_model,
-                chroma_client=_get_chroma_client(CHROMA_DB_PATH_GEMINI),
-                chroma_db_path=CHROMA_DB_PATH_GEMINI,
-            )
-        return _GEMINI_RUNTIME
-
     raise RuntimeError(f"Unsupported embedding provider: {provider}")
 
 
@@ -278,8 +193,6 @@ def get_cached_embedding_runtime(
 ) -> EmbeddingRuntime | None:
     if provider == LOCAL_EMBEDDING_PROVIDER:
         return _LOCAL_RUNTIME
-    if provider == GEMINI_PROVIDER:
-        return _GEMINI_RUNTIME
     raise RuntimeError(f"Unsupported embedding provider: {provider}")
 
 

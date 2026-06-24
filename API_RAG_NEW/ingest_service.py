@@ -40,7 +40,6 @@ from API_RAG_NEW.rag_pipeline import (
 )
 from API_RAG_NEW.schemas import IngestResponse
 from API_RAG_NEW._services_shared import (
-    GEMINI_STORAGE_PREFIX,
     _clean_logical_collection_name,
     _get_collection_or_404,
     _runtime_for_provider,

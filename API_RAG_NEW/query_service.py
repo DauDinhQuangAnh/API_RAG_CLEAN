@@ -11,7 +11,6 @@ from llms.onlinellms import OnlineLLMs
 from API_RAG_NEW.citations import build_citations_from_metadatas
 from API_RAG_NEW.config import (
     GEMINI_MODEL,
-    GEMINI_PROVIDER,
     GEMINI_RERANKER_MODEL,
     LOCAL_EMBEDDING_PROVIDER,
     RAG_CROSS_ENCODER_MODEL,
@@ -211,7 +210,7 @@ def _build_llm(
         raise HTTPException(status_code=400, detail="GEMINI_API_KEY not configured")
 
     return OnlineLLMs(
-        name=GEMINI_PROVIDER,
+        name="gemini",
         api_key=resolved_api_key,
         model_version=model_version or GEMINI_MODEL,
     )

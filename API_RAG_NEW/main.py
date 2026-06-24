@@ -31,7 +31,6 @@ app.add_middleware(
 )
 
 LOCAL_PROVIDER = "local_sbert"
-GEMINI_EMBEDDING_PROVIDER = "gemini"
 
 
 @app.get("/health")
@@ -301,102 +300,6 @@ def query_local_collection(collection_name: str, req: QueryRequest) -> QueryResp
     return _query_collection_for_provider(LOCAL_PROVIDER, collection_name, req)
 
 
-@app.get("/gemini/collections", dependencies=[Depends(require_internal_api_key)])
-def list_gemini_collections() -> dict[str, list[str]]:
-    return _list_collections_for_provider(GEMINI_EMBEDDING_PROVIDER)
-
-
-@app.post(
-    "/gemini/collections",
-    response_model=CollectionInfo,
-    dependencies=[Depends(require_internal_api_key)],
-)
-def create_gemini_collection(req: CollectionCreateRequest) -> CollectionInfo:
-    return _create_collection_for_provider(GEMINI_EMBEDDING_PROVIDER, req)
-
-
-@app.get(
-    "/gemini/collections/{collection_name}",
-    response_model=CollectionInfo,
-    dependencies=[Depends(require_internal_api_key)],
-)
-def get_gemini_collection_info(collection_name: str) -> CollectionInfo:
-    return _get_collection_info_for_provider(GEMINI_EMBEDDING_PROVIDER, collection_name)
-
-
-@app.get(
-    "/gemini/collections/{collection_name}/records",
-    response_model=CollectionRecordsResponse,
-    dependencies=[Depends(require_internal_api_key)],
-)
-def get_gemini_collection_records(
-    collection_name: str,
-    limit: int = Query(default=200, ge=1, le=5000),
-    offset: int = Query(default=0, ge=0),
-) -> CollectionRecordsResponse:
-    return _get_collection_records_for_provider(
-        GEMINI_EMBEDDING_PROVIDER,
-        collection_name,
-        limit,
-        offset,
-    )
-
-
-@app.patch(
-    "/gemini/collections/{collection_name}",
-    response_model=CollectionInfo,
-    dependencies=[Depends(require_internal_api_key)],
-)
-def update_gemini_collection(
-    collection_name: str,
-    req: CollectionUpdateRequest,
-) -> CollectionInfo:
-    return _update_collection_for_provider(
-        GEMINI_EMBEDDING_PROVIDER,
-        collection_name,
-        req,
-    )
-
-
-@app.delete(
-    "/gemini/collections/{collection_name}",
-    dependencies=[Depends(require_internal_api_key)],
-)
-def delete_gemini_collection(collection_name: str) -> dict[str, str]:
-    return _delete_collection_for_provider(GEMINI_EMBEDDING_PROVIDER, collection_name)
-
-
-@app.post(
-    "/gemini/ingest",
-    response_model=IngestResponse,
-    dependencies=[Depends(require_internal_api_key)],
-)
-async def ingest_gemini_file(
-    file: UploadFile = File(...),
-    collection_name: str | None = Form(None),
-    chunking_profile: str | None = Form(None),
-) -> IngestResponse:
-    return await _ingest_file_for_provider(
-        GEMINI_EMBEDDING_PROVIDER,
-        file,
-        collection_name,
-        chunking_profile,
-    )
-
-
-@app.post(
-    "/gemini/collections/{collection_name}/query",
-    response_model=QueryResponse,
-    dependencies=[Depends(require_internal_api_key)],
-)
-def query_gemini_collection(collection_name: str, req: QueryRequest) -> QueryResponse:
-    return _query_collection_for_provider(
-        GEMINI_EMBEDDING_PROVIDER,
-        collection_name,
-        req,
-    )
-
-
 # ── Document-level endpoints ──────────────────────────────────────────────────
 
 def _list_documents_for_provider(provider: str, collection_name: str) -> dict:
@@ -441,24 +344,6 @@ def delete_local_collection_document(collection_name: str, source: str) -> dict:
     return _delete_document_for_provider(LOCAL_PROVIDER, collection_name, source)
 
 
-@app.get(
-    "/gemini/collections/{collection_name}/documents",
-    dependencies=[Depends(require_internal_api_key)],
-)
-def list_gemini_collection_documents(collection_name: str) -> dict:
-    return _list_documents_for_provider(GEMINI_EMBEDDING_PROVIDER, collection_name)
-
-
-@app.delete(
-    "/gemini/collections/{collection_name}/documents/{source:path}",
-    dependencies=[Depends(require_internal_api_key)],
-)
-def delete_gemini_collection_document(collection_name: str, source: str) -> dict:
-    return _delete_document_for_provider(
-        GEMINI_EMBEDDING_PROVIDER, collection_name, source
-    )
-
-
 # ── Streaming SSE endpoints ───────────────────────────────────────────────────
 
 def _stream_query_for_provider(
@@ -497,14 +382,3 @@ def query_local_collection_stream(
     req: QueryRequest,
 ) -> StreamingResponse:
     return _stream_query_for_provider(LOCAL_PROVIDER, collection_name, req)
-
-
-@app.post(
-    "/gemini/collections/{collection_name}/query/stream",
-    dependencies=[Depends(require_internal_api_key)],
-)
-def query_gemini_collection_stream(
-    collection_name: str,
-    req: QueryRequest,
-) -> StreamingResponse:
-    return _stream_query_for_provider(GEMINI_EMBEDDING_PROVIDER, collection_name, req)

@@ -37,15 +37,8 @@ class TestListCollections:
         assert "collections" in result
         assert "my_col" in result["collections"]
 
-    def test_excludes_gemini_collections_from_local(self, runtime):
-        gemini_col = _make_mock_collection("gemini.some_col")
-        gemini_col.metadata = {
-            "embedding_provider": "gemini",
-            "embedding_model": "gemini-embedding-2",
-            "embedding_dimension": 768,
-            "storage_collection_name": "gemini.some_col",
-        }
-        runtime.chroma_client.list_collections.return_value = [gemini_col]
+    def test_returns_empty_when_no_collections(self, runtime):
+        runtime.chroma_client.list_collections.return_value = []
 
         with patch(
             "API_RAG_NEW.collection_service._runtime_for_provider",
@@ -126,17 +119,6 @@ class TestStorageCollectionName:
         from API_RAG_NEW._services_shared import storage_collection_name
         result = storage_collection_name("local_sbert", "my_collection")
         assert result == "my_collection"
-
-    def test_gemini_adds_prefix(self):
-        from API_RAG_NEW._services_shared import storage_collection_name
-        result = storage_collection_name("gemini", "my_collection")
-        assert result.startswith("gemini.")
-
-    def test_gemini_truncates_long_names(self):
-        from API_RAG_NEW._services_shared import storage_collection_name
-        long_name = "a" * 60
-        result = storage_collection_name("gemini", long_name)
-        assert len(result) <= 63
 
     def test_invalid_provider_raises(self):
         from API_RAG_NEW._services_shared import storage_collection_name

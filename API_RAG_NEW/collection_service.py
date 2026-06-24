@@ -6,7 +6,6 @@ from fastapi import HTTPException
 
 from API_RAG_NEW.config import (
     EmbeddingRuntime,
-    GEMINI_PROVIDER,
     LOCAL_EMBEDDING_PROVIDER,
 )
 from API_RAG_NEW.schemas import (
@@ -16,7 +15,6 @@ from API_RAG_NEW.schemas import (
     CollectionUpdateRequest,
 )
 from API_RAG_NEW._services_shared import (
-    GEMINI_STORAGE_PREFIX,
     _clean_logical_collection_name,
     _get_collection_or_404,
     _runtime_for_provider,
@@ -309,12 +307,6 @@ def _collection_matches_runtime_metadata(
     collection_name = str(collection.name)
     storage_metadata = metadata.get("storage_collection_name")
     if storage_metadata is not None and str(storage_metadata) != collection_name:
-        return False
-
-    if runtime.provider == GEMINI_PROVIDER:
-        if not collection_name.startswith(GEMINI_STORAGE_PREFIX):
-            return False
-    elif collection_name.startswith(GEMINI_STORAGE_PREFIX):
         return False
 
     provider = metadata.get("embedding_provider")
