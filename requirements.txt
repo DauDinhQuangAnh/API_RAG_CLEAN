@@ -12,7 +12,3 @@ backoff
 nltk
 python-dotenv
 sentence-transformers
-# Testing
-pytest
-pytest-asyncio
-httpx
