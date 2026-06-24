@@ -7,6 +7,79 @@ from typing import Any, Protocol, Sequence
 
 MAX_RERANK_CANDIDATE_CHARS = 1500
 
+_CROSS_ENCODER_INSTANCES: dict[str, Any] = {}
+
+
+class CrossEncoderReranker:
+    """Reranker dùng cross-encoder local — phù hợp tiếng Việt với itdainb/PhoRanker."""
+
+    def __init__(self, model_name: str) -> None:
+        self.model_name = model_name
+        self._model = self._load(model_name)
+
+    @staticmethod
+    def _load(model_name: str) -> Any:
+        if model_name in _CROSS_ENCODER_INSTANCES:
+            return _CROSS_ENCODER_INSTANCES[model_name]
+        try:
+            from sentence_transformers import CrossEncoder
+            model = CrossEncoder(model_name)
+        except (ImportError, Exception):
+            from transformers import AutoTokenizer, AutoModelForSequenceClassification
+            import torch
+
+            class _HFCrossEncoder:
+                def __init__(self, name: str) -> None:
+                    self.tokenizer = AutoTokenizer.from_pretrained(name)
+                    self.model = AutoModelForSequenceClassification.from_pretrained(name)
+                    self.model.eval()
+                    self._torch = torch
+
+                def predict(self, pairs: list[tuple[str, str]]) -> list[float]:
+                    inputs = self.tokenizer(
+                        [q for q, _ in pairs],
+                        [d for _, d in pairs],
+                        padding=True,
+                        truncation=True,
+                        return_tensors="pt",
+                    )
+                    with self._torch.no_grad():
+                        logits = self.model(**inputs).logits
+                    if logits.shape[-1] > 1:
+                        scores = logits[:, 0].tolist()
+                    else:
+                        scores = logits.squeeze(-1).tolist()
+                    return scores if isinstance(scores, list) else [scores]
+
+            model = _HFCrossEncoder(model_name)
+
+        _CROSS_ENCODER_INSTANCES[model_name] = model
+        return model
+
+    def rerank(
+        self,
+        query: str,
+        candidates: Sequence[Any],
+        final_n: int,
+    ) -> list[str]:
+        if not candidates:
+            return []
+        pairs = [
+            (query, _truncate_candidate_text(candidate.document))
+            for candidate in candidates
+        ]
+        try:
+            scores: list[float] = self._model.predict(pairs)
+        except Exception:
+            return [c.id for c in candidates[:final_n]]
+
+        scored = sorted(
+            zip(scores, candidates),
+            key=lambda item: item[0],
+            reverse=True,
+        )
+        return [c.id for _, c in scored[:final_n]]
+
 
 class RerankCandidate(Protocol):
     id: str

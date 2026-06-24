@@ -43,6 +43,7 @@ class CollectionRecordsResponse(BaseModel):
 class QueryRequest(BaseModel):
     query: str
     number_docs_retrieval: int = Field(default=3, ge=1, le=50)
+    include_debug_info: bool = False
 
 
 class Citation(BaseModel):
@@ -68,5 +69,12 @@ class QueryResponse(BaseModel):
     metadatas: list[Any]
     retrieved_data: str
     answer: str
-    full_prompt: str
+    full_prompt: str | None = None
     citations: list[Citation] = Field(default_factory=list)
+
+
+class DocumentInfo(BaseModel):
+    source: str
+    source_type: str | None = None
+    chunk_count: int
+    doc_id: str | None = None

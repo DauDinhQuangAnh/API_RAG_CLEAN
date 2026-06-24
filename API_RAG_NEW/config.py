@@ -37,10 +37,10 @@ class EmbeddingRuntime:
 
 def parse_cors_origins(raw_value: str | None) -> list[str]:
     if not raw_value:
-        return ["*"]
+        return ["http://localhost:3000", "http://localhost:8080"]
 
     origins = [item.strip() for item in raw_value.split(",") if item.strip()]
-    return origins or ["*"]
+    return origins or ["http://localhost:3000", "http://localhost:8080"]
 
 
 def get_int_env(name: str, default: int) -> int:
@@ -184,6 +184,12 @@ RAG_GEMINI_EMBEDDING_RETRY_MAX_SECONDS = get_float_env(
     "RAG_GEMINI_EMBEDDING_RETRY_MAX_SECONDS",
     8.0,
 )
+RAG_DEBUG_MODE = get_bool_env("RAG_DEBUG_MODE", False)
+RAG_EMBEDDING_CACHE_SIZE = max(0, get_int_env("RAG_EMBEDDING_CACHE_SIZE", 1000))
+RAG_CROSS_ENCODER_MODEL = os.getenv(
+    "RAG_CROSS_ENCODER_MODEL",
+    "itdainb/PhoRanker",
+)
 
 
 def get_gemini_api_key() -> str | None:
@@ -275,3 +281,12 @@ def get_cached_embedding_runtime(
     if provider == GEMINI_PROVIDER:
         return _GEMINI_RUNTIME
     raise RuntimeError(f"Unsupported embedding provider: {provider}")
+
+
+def check_chroma_connectivity(db_path: str) -> tuple[bool, str]:
+    try:
+        client = _get_chroma_client(db_path)
+        client.heartbeat()
+        return True, "ok"
+    except Exception as exc:
+        return False, str(exc)

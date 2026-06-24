@@ -12,7 +12,7 @@ from fastapi import HTTPException
 
 from API_RAG_NEW.concurrency import acquire_embedding_slot
 from API_RAG_NEW.embeddings import encode_documents, encode_queries
-from API_RAG_NEW.reranker import rerank_candidate_ids
+from API_RAG_NEW.reranker import CrossEncoderReranker, rerank_candidate_ids
 
 
 _INTERNAL_RECORD_ID_KEYS = {"id", "_id"}
@@ -174,6 +174,7 @@ def vector_search(
     max_total_candidates: int = 40,
     enable_distance_guard: bool = False,
     max_distance: float | None = None,
+    cross_encoder_model: str | None = None,
 ) -> tuple[list[Any], str]:
     final_n = max(1, int(number_docs_retrieval))
     initial_n = max(final_n, int(initial_top_k or final_n))
@@ -214,6 +215,7 @@ def vector_search(
         rerank_llm=rerank_llm,
         rerank_llm_factory=rerank_llm_factory,
         query_hints=query_hints,
+        cross_encoder_model=cross_encoder_model,
     )
     final_metadatas = [chunk.metadata for chunk in ranked_chunks]
     return [final_metadatas], format_retrieved_data_with_markers(final_metadatas)
@@ -589,23 +591,33 @@ def _rank_chunks(
     rerank_llm: Any | None,
     rerank_llm_factory: Any | None = None,
     query_hints: dict[str, bool] | None = None,
+    cross_encoder_model: str | None = None,
 ) -> list[RetrievedChunk]:
     original_order = list(candidates)
-    if reranker_type.casefold() == "llm":
+    normalized_type = reranker_type.casefold()
+
+    # Cross-encoder reranker (local, tiếng Việt)
+    if normalized_type == "crossencoder":
+        model_name = cross_encoder_model or _default_cross_encoder_model()
+        try:
+            reranker = CrossEncoderReranker(model_name)
+            ranked_ids = reranker.rerank(query, original_order, final_n)
+        except Exception:
+            ranked_ids = []
+    elif normalized_type == "llm":
         active_rerank_llm = rerank_llm
         if active_rerank_llm is None and callable(rerank_llm_factory):
             active_rerank_llm = rerank_llm_factory()
-    else:
-        active_rerank_llm = None
-
-    if active_rerank_llm is not None:
-        ranked_ids = rerank_candidate_ids(
-            query,
-            original_order,
-            final_n,
-            active_rerank_llm,
-            query_hints=query_hints,
-        )
+        if active_rerank_llm is not None:
+            ranked_ids = rerank_candidate_ids(
+                query,
+                original_order,
+                final_n,
+                active_rerank_llm,
+                query_hints=query_hints,
+            )
+        else:
+            ranked_ids = []
     else:
         ranked_ids = []
 
@@ -629,6 +641,14 @@ def _rank_chunks(
         if len(selected) >= final_n:
             break
     return selected
+
+
+def _default_cross_encoder_model() -> str:
+    try:
+        from API_RAG_NEW.config import RAG_CROSS_ENCODER_MODEL
+        return RAG_CROSS_ENCODER_MODEL
+    except ImportError:
+        return "itdainb/PhoRanker"
 
 
 def _to_retrieved_chunk(

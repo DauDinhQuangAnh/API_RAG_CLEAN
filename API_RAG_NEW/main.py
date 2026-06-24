@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
 from API_RAG_NEW import services
 from API_RAG_NEW.concurrency import acquire_ingest_slot, acquire_query_slot
@@ -12,6 +13,7 @@ from API_RAG_NEW.schemas import (
     CollectionInfo,
     CollectionRecordsResponse,
     CollectionUpdateRequest,
+    DocumentInfo,
     IngestResponse,
     QueryRequest,
     QueryResponse,
@@ -33,7 +35,7 @@ GEMINI_EMBEDDING_PROVIDER = "gemini"
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
+def health() -> dict[str, object]:
     return services.health_payload()
 
 
@@ -393,3 +395,116 @@ def query_gemini_collection(collection_name: str, req: QueryRequest) -> QueryRes
         collection_name,
         req,
     )
+
+
+# ── Document-level endpoints ──────────────────────────────────────────────────
+
+def _list_documents_for_provider(provider: str, collection_name: str) -> dict:
+    return services.list_documents(collection_name, provider=provider)
+
+
+def _delete_document_for_provider(
+    provider: str, collection_name: str, source: str
+) -> dict:
+    return services.delete_document(collection_name, source, provider=provider)
+
+
+@app.get(
+    "/collections/{collection_name}/documents",
+    dependencies=[Depends(require_internal_api_key)],
+)
+def list_collection_documents(collection_name: str) -> dict:
+    return _list_documents_for_provider(LOCAL_PROVIDER, collection_name)
+
+
+@app.delete(
+    "/collections/{collection_name}/documents/{source:path}",
+    dependencies=[Depends(require_internal_api_key)],
+)
+def delete_collection_document(collection_name: str, source: str) -> dict:
+    return _delete_document_for_provider(LOCAL_PROVIDER, collection_name, source)
+
+
+@app.get(
+    "/local/collections/{collection_name}/documents",
+    dependencies=[Depends(require_internal_api_key)],
+)
+def list_local_collection_documents(collection_name: str) -> dict:
+    return _list_documents_for_provider(LOCAL_PROVIDER, collection_name)
+
+
+@app.delete(
+    "/local/collections/{collection_name}/documents/{source:path}",
+    dependencies=[Depends(require_internal_api_key)],
+)
+def delete_local_collection_document(collection_name: str, source: str) -> dict:
+    return _delete_document_for_provider(LOCAL_PROVIDER, collection_name, source)
+
+
+@app.get(
+    "/gemini/collections/{collection_name}/documents",
+    dependencies=[Depends(require_internal_api_key)],
+)
+def list_gemini_collection_documents(collection_name: str) -> dict:
+    return _list_documents_for_provider(GEMINI_EMBEDDING_PROVIDER, collection_name)
+
+
+@app.delete(
+    "/gemini/collections/{collection_name}/documents/{source:path}",
+    dependencies=[Depends(require_internal_api_key)],
+)
+def delete_gemini_collection_document(collection_name: str, source: str) -> dict:
+    return _delete_document_for_provider(
+        GEMINI_EMBEDDING_PROVIDER, collection_name, source
+    )
+
+
+# ── Streaming SSE endpoints ───────────────────────────────────────────────────
+
+def _stream_query_for_provider(
+    provider: str,
+    collection_name: str,
+    req: QueryRequest,
+) -> StreamingResponse:
+    with acquire_query_slot():
+        return StreamingResponse(
+            services.query_collection_stream(collection_name, req, provider=provider),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+
+@app.post(
+    "/collections/{collection_name}/query/stream",
+    dependencies=[Depends(require_internal_api_key)],
+)
+def query_collection_stream(
+    collection_name: str,
+    req: QueryRequest,
+) -> StreamingResponse:
+    return _stream_query_for_provider(LOCAL_PROVIDER, collection_name, req)
+
+
+@app.post(
+    "/local/collections/{collection_name}/query/stream",
+    dependencies=[Depends(require_internal_api_key)],
+)
+def query_local_collection_stream(
+    collection_name: str,
+    req: QueryRequest,
+) -> StreamingResponse:
+    return _stream_query_for_provider(LOCAL_PROVIDER, collection_name, req)
+
+
+@app.post(
+    "/gemini/collections/{collection_name}/query/stream",
+    dependencies=[Depends(require_internal_api_key)],
+)
+def query_gemini_collection_stream(
+    collection_name: str,
+    req: QueryRequest,
+) -> StreamingResponse:
+    return _stream_query_for_provider(GEMINI_EMBEDDING_PROVIDER, collection_name, req)
